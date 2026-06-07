@@ -8,7 +8,10 @@
 3D population globe (deck.gl GlobeView + extruded H3 columns), Kontur Population data,
 static deploy on GitHub Pages. See [`docs/architecture.md`](docs/architecture.md).
 
-## Status: Sprint 1 — vertical slice ✅ (deploying)
+## Status: Sprint 1 — vertical slice ✅ SHIPPED
+
+**Live:** https://zeevmala.github.io/world-population-globe/
+**Repo:** https://github.com/Zeevmala/world-population-globe
 
 | # | Task | State |
 |---|---|---|
@@ -17,7 +20,7 @@ static deploy on GitHub Pages. See [`docs/architecture.md`](docs/architecture.md
 | 3 | Trackers: architecture.md, PROJECT_STATE.md, README | ✅ done |
 | 4 | Globe frontend: sphere + land + extruded H3 columns, LOD, HUD | ✅ done |
 | 5 | Verify: typecheck + lint + build + visual QA | ✅ done |
-| 6 | Repo + CI/CD + GitHub Pages deploy | ⏳ in progress |
+| 6 | Repo + CI/CD + GitHub Pages deploy | ✅ done |
 
 ### Verification log (Sprint 1)
 - `tsc -b`, `eslint .`, `vite build` — all clean.
@@ -25,9 +28,12 @@ static deploy on GitHub Pages. See [`docs/architecture.md`](docs/architecture.md
 - Visual QA (Claude Preview): globe + Inferno towers render; auto-rotate works; 0 console errors;
   mobile + desktop layouts clean.
 
-### Known gaps / smoke tests pending
-- [ ] Live **zoom-in** test of the `mid` (2 M-cell) tier on the deployed site (lazy load + cull path).
-- [ ] Confirm GitHub Pages serves Parquet (`asyncBufferFromUrl` range requests) under the repo subpath.
+### Deploy validation (Sprint 1)
+- [x] CI green (tsc + eslint + build); Pages deploy green.
+- [x] Live page + all data assets return 200; `Accept-Ranges: bytes` present
+      (overview 1.2 MB, mid 31 MB) → in-browser Parquet column reads work under the subpath.
+- [x] `index.html` references correct `/world-population-globe/` base; hashed JS/CSS resolve.
+- [ ] Manual live **zoom-in** smoke test of the `mid` (2 M-cell) tier (lazy load + cull path) — assets confirmed served; interactive pass pending.
 
 ## Iteration loop
 1. Pull a backlog item into a sprint task.
