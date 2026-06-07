@@ -4,7 +4,7 @@
   "license": "CC-BY 4.0",
   "attribution": "\u00a9 Kontur (kontur.io), CC-BY 4.0 \u2014 GHSL, Meta, Microsoft, Copernicus, OSM",
   "crs": "EPSG:4326",
-  "generatedAt": "2026-06-06T21:54:52Z",
+  "generatedAt": "2026-06-07T17:38:35Z",
   "lods": [
     {
       "lod": "overview",
@@ -24,11 +24,24 @@
       "h3Res": 6,
       "approxKm": 3.0,
       "minZoom": 2.2,
-      "maxZoom": 8.0,
+      "maxZoom": 4.5,
       "cellCount": 2016971,
       "maxPopulation": 1949226.0,
       "sumPopulation": 8031924024.0,
       "bytes": 31277924
+    },
+    {
+      "lod": "r8",
+      "tiled": true,
+      "tileParentRes": 3,
+      "indexFile": "data/tiles/r8/index.json",
+      "h3Res": 8,
+      "approxKm": 0.4,
+      "minZoom": 4.5,
+      "maxZoom": 24,
+      "cellCount": 32957699,
+      "maxPopulation": 40673.0,
+      "sumPopulation": 8031924024.0
     }
   ]
 }

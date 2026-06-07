@@ -1,15 +1,16 @@
 import { useGlobeStore } from '../store/useGlobeStore'
-import { pickLod } from '../lib/lod'
+import { selectActive } from '../lib/lod'
 
 export function Controls() {
   const autoRotate = useGlobeStore((s) => s.autoRotate)
   const toggleAutoRotate = useGlobeStore((s) => s.toggleAutoRotate)
   const manifest = useGlobeStore((s) => s.manifest)
   const data = useGlobeStore((s) => s.data)
-  const zoom = useGlobeStore((s) => s.viewState.zoom)
+  const r8Data = useGlobeStore((s) => s.r8Data)
+  const viewState = useGlobeStore((s) => s.viewState)
 
-  const activeLod = pickLod(zoom, manifest, data)
-  const entry = manifest?.lods.find((l) => l.lod === activeLod)
+  const { entry, data: activeData } = selectActive(viewState, manifest, data, r8Data)
+  const loadedCount = activeData?.h3.length ?? entry?.cellCount ?? 0
 
   return (
     <div className="flex flex-col items-end gap-2">
@@ -22,7 +23,7 @@ export function Controls() {
       </button>
       {entry && (
         <div className="hidden rounded-lg border border-white/10 bg-black/40 px-3 py-1.5 text-[11px] text-white/70 shadow-lg backdrop-blur-md sm:block">
-          {entry.approxKm} km cells · {entry.cellCount.toLocaleString()} rendered
+          {entry.approxKm} km cells · {loadedCount.toLocaleString()} loaded
         </div>
       )}
     </div>

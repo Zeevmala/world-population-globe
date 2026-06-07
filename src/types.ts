@@ -3,7 +3,8 @@
 /** One level-of-detail entry as published in `public/data/manifest.json`. */
 export interface LodEntry {
   lod: string
-  file: string
+  /** Whole-tier Parquet path (absent for tiled tiers). */
+  file?: string
   h3Res: number
   approxKm: number
   minZoom: number
@@ -11,7 +12,30 @@ export interface LodEntry {
   cellCount: number
   maxPopulation: number
   sumPopulation: number
-  bytes: number
+  bytes?: number
+  /** Tiled tiers (e.g. r8) stream per-viewport from an index instead of a single file. */
+  tiled?: boolean
+  tileParentRes?: number
+  indexFile?: string
+}
+
+/** One streamable tile (the r8 cells under a coarse H3 parent). */
+export interface TileRef {
+  parent: string
+  file: string
+  cellCount: number
+}
+
+/** Index of all tiles for a tiled tier (`public/data/tiles/r8/index.json`). */
+export interface TileIndex {
+  parentRes: number
+  h3Res: number
+  approxKm: number
+  tileCount: number
+  cellCount: number
+  maxPopulation: number
+  sumPopulation: number
+  tiles: TileRef[]
 }
 
 /** Top-level data manifest describing all baked LOD tiers + provenance. */

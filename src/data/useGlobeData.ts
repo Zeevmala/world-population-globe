@@ -43,6 +43,7 @@ export function useGlobeData(): void {
   useEffect(() => {
     if (!manifest) return
     for (const entry of manifest.lods) {
+      if (entry.tiled) continue // tiled tiers (r8) stream via useTileStreaming, not whole-load
       if (zoom >= entry.minZoom && !data[entry.lod] && !requested.current.has(entry.lod)) {
         requested.current.add(entry.lod)
         loadLod(entry)

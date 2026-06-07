@@ -10,6 +10,7 @@ import type { GlobeViewState } from '../types'
 import { useGlobeStore } from '../store/useGlobeStore'
 import { useGlobeLayers } from '../layers/useGlobeLayers'
 import { useGlobeData } from '../data/useGlobeData'
+import { useTileStreaming } from '../data/useTileStreaming'
 
 const GLOBE_VIEW = new GlobeView({ id: 'globe' })
 
@@ -24,6 +25,7 @@ const CONTROLLER = { inertia: 300, scrollZoom: { smooth: true } as const }
 
 export function Globe() {
   useGlobeData()
+  useTileStreaming()
   const layers = useGlobeLayers()
   const viewState = useGlobeStore((s) => s.viewState)
   const setViewState = useGlobeStore((s) => s.setViewState)

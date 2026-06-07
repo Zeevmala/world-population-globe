@@ -35,15 +35,29 @@ static deploy on GitHub Pages. See [`docs/architecture.md`](docs/architecture.md
 - [x] `index.html` references correct `/world-population-globe/` base; hashed JS/CSS resolve.
 - [ ] Manual live **zoom-in** smoke test of the `mid` (2 M-cell) tier (lazy load + cull path) — assets confirmed served; interactive pass pending.
 
+## Status: Sprint 2 — 400 m (r8) deep-zoom tile streaming ⏳
+
+| # | Task | State |
+|---|---|---|
+| 7 | r8 tile pyramid: download + DuckDB partition by H3 parent + index | ⏳ in progress |
+| 8 | Client tile streaming (`useTileStreaming`) + visible-parent enumeration | ✅ done |
+| 9 | Wire r8 LOD band + rendering (`selectActive`, store r8 slice) | ✅ done |
+| 10 | Docs (architecture tiling section, this board) | ⏳ in progress |
+| 11 | Verify (integrity, zoom QA, build) | ☐ |
+| 12 | Deploy (commit, push, smoke test) | ☐ |
+
+Approach: r8 cells partitioned by a coarse H3 parent → many small Parquet tiles +
+`index.json`; client computes visible parents (h3-js `gridDisk`), fetches/LRU-caches/merges
+tiles per viewport, renders via the existing `H3HexagonLayer` path, viewport-culled.
+LOD bands: overview r4 (<2.2) → mid r6 (2.2–4.5) → r8 (≥4.5).
+
 ## Iteration loop
 1. Pull a backlog item into a sprint task.
 2. Architecture note (if non-trivial) → `docs/architecture.md`.
 3. Implement (typed, vectorized, modular). 4. `tsc + eslint + build` + Preview QA.
 5. Update this file + commit. 6. Deploy via CI.
 
-## Backlog (Sprint 2+)
-- **400 m (r8) deep zoom**: tile pyramid + per-viewport streaming (PMTiles / range-read shards).
-- Replace lng/lat-box cull with true frustum culling.
+## Backlog (Sprint 3+)
 - Tooltip/fly-to search (geocode), share-state URL.
 - Bilingual RTL (he/en) UI; PWA offline; night-lights basemap toggle.
 - Code-split deck.gl (dynamic import) to cut the ~1 MB bundle.

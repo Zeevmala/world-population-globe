@@ -8,8 +8,8 @@ import { SphereGeometry } from '@luma.gl/engine'
 
 import { BASE } from '../data/load'
 import { inferno } from '../lib/colorRamp'
-import { cullForView, cullKeyFor, pickLod } from '../lib/lod'
-import { EARTH_RADIUS_M, ELEVATION_MAX_M, makeLogNorm } from '../lib/scales'
+import { cullForView, cullKeyFor, selectActive } from '../lib/lod'
+import { EARTH_RADIUS_M, ELEVATION_PER_KM_M, makeLogNorm } from '../lib/scales'
 import { useGlobeStore } from '../store/useGlobeStore'
 import type { HoverInfo, LodData } from '../types'
 
@@ -32,6 +32,7 @@ function buildPopulationLayer(
 ): Layer {
   const { h3, population, lng, lat, approxKm } = data
   const norm = makeLogNorm(data.maxPopulation)
+  const elevMax = approxKm * ELEVATION_PER_KM_M
   const srcOf = (renderIndex: number) => (indices ? indices[renderIndex] : renderIndex)
   const count = indices ? indices.length : population.length
 
@@ -47,7 +48,7 @@ function buildPopulationLayer(
     material: { ambient: 0.7, diffuse: 0.5, shininess: 20, specularColor: [40, 40, 40] },
     getHexagon: (_: unknown, info: AccessorInfo) => h3[srcOf(info.index)],
     getElevation: (_: unknown, info: AccessorInfo) =>
-      norm(population[srcOf(info.index)]) * ELEVATION_MAX_M,
+      norm(population[srcOf(info.index)]) * elevMax,
     getFillColor: (_: unknown, info: AccessorInfo): Color => {
       const [r, g, b] = inferno(norm(population[srcOf(info.index)]))
       return [r, g, b, 255]
@@ -71,12 +72,12 @@ function buildPopulationLayer(
 /** Assemble the globe layer stack: ocean sphere, land outline, population columns. */
 export function useGlobeLayers(): Layer[] {
   const data = useGlobeStore((s) => s.data)
+  const r8Data = useGlobeStore((s) => s.r8Data)
   const manifest = useGlobeStore((s) => s.manifest)
   const viewState = useGlobeStore((s) => s.viewState)
   const setHover = useGlobeStore((s) => s.setHover)
 
-  const activeLod = pickLod(viewState.zoom, manifest, data)
-  const lodData = activeLod ? data[activeLod] : undefined
+  const { data: lodData } = selectActive(viewState, manifest, data, r8Data)
 
   const cullKey = cullKeyFor(lodData, viewState)
   const cull = useMemo(

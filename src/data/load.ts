@@ -15,8 +15,9 @@ export async function loadManifest(): Promise<Manifest> {
   return (await res.json()) as Manifest
 }
 
-/** Load one LOD tier into columnar typed arrays. */
+/** Load one whole (non-tiled) LOD tier into columnar typed arrays. */
 export async function loadLod(entry: LodEntry): Promise<LodData> {
+  if (!entry.file) throw new Error(`LOD "${entry.lod}" has no file (tiled tiers must stream)`)
   const cols = await readColumns(`${BASE}${entry.file}`, ['h3', 'population', 'lng', 'lat'])
   return {
     lod: entry.lod,

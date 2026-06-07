@@ -1,4 +1,4 @@
-import type { GlobeViewState, LodData, Manifest } from '../types'
+import type { GlobeViewState, LodData, LodEntry, Manifest } from '../types'
 
 /** Hard cap on rendered cells per frame for the dense tier (perf guard). */
 const MAX_RENDERED_CELLS = 120_000
@@ -18,6 +18,26 @@ export function pickLod(
     if (zoom >= entry.minZoom && loaded[entry.lod]) chosen = entry.lod
   }
   return chosen ?? manifest.lods.find((l) => loaded[l.lod])?.lod ?? null
+}
+
+/**
+ * Resolve the active tier + its data for the current view. The tiled r8 tier
+ * wins when its zoom band is reached and viewport tiles are merged & ready;
+ * otherwise fall back to the finest loaded whole tier ({@link pickLod}).
+ */
+export function selectActive(
+  view: GlobeViewState,
+  manifest: Manifest | null,
+  loaded: Record<string, LodData>,
+  r8Data: LodData | null,
+): { entry?: LodEntry; data?: LodData } {
+  if (!manifest) return {}
+  const r8 = manifest.lods.find((l) => l.lod === 'r8')
+  if (r8 && view.zoom >= r8.minZoom && r8Data && r8Data.h3.length > 0) {
+    return { entry: r8, data: r8Data }
+  }
+  const lod = pickLod(view.zoom, manifest, loaded)
+  return { entry: manifest.lods.find((l) => l.lod === lod), data: lod ? loaded[lod] : undefined }
 }
 
 /** Smallest angular difference between two longitudes, handling the ±180 seam. */

@@ -14,6 +14,8 @@ type Status = 'idle' | 'loading' | 'ready' | 'error'
 interface GlobeStore {
   manifest: Manifest | null
   data: Record<string, LodData>
+  /** Merged, viewport-scoped r8 tiles (streamed); null until deep zoom. */
+  r8Data: LodData | null
   status: Status
   error: string | null
   hover: HoverInfo | null
@@ -22,6 +24,7 @@ interface GlobeStore {
 
   setManifest: (m: Manifest) => void
   addData: (d: LodData) => void
+  setR8Data: (d: LodData | null) => void
   setStatus: (s: Status) => void
   setError: (e: string) => void
   setHover: (h: HoverInfo | null) => void
@@ -36,6 +39,7 @@ const wrapLng = (lng: number): number => ((((lng + 180) % 360) + 360) % 360) - 1
 export const useGlobeStore = create<GlobeStore>((set) => ({
   manifest: null,
   data: {},
+  r8Data: null,
   status: 'idle',
   error: null,
   hover: null,
@@ -44,6 +48,7 @@ export const useGlobeStore = create<GlobeStore>((set) => ({
 
   setManifest: (manifest) => set({ manifest }),
   addData: (d) => set((s) => ({ data: { ...s.data, [d.lod]: d } })),
+  setR8Data: (r8Data) => set({ r8Data }),
   setStatus: (status) => set({ status }),
   setError: (error) => set({ error, status: 'error' }),
   setHover: (hover) => set({ hover }),
@@ -55,3 +60,9 @@ export const useGlobeStore = create<GlobeStore>((set) => ({
   toggleAutoRotate: () => set((s) => ({ autoRotate: !s.autoRotate })),
   setAutoRotate: (autoRotate) => set({ autoRotate }),
 }))
+
+// Dev-only debug handle (stripped from production builds): lets tooling inspect
+// state and drive the camera, e.g. `__globe.getState().setViewState(...)`.
+if (import.meta.env.DEV) {
+  ;(globalThis as unknown as { __globe?: typeof useGlobeStore }).__globe = useGlobeStore
+}
