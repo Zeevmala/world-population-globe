@@ -36,6 +36,31 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
+    outputs:
+      page_url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+
+  # Post-deploy gate: fetch + parse the LIVE data the way the browser does
+  # (whole-file + transparent gzip) and assert it loads end-to-end. Catches
+  # deploy-only failures (e.g. CDN gzip+range) that build-time checks cannot.
+  verify-live:
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Verify deployed data parses end-to-end
+        run: |
+          url="${{ needs.deploy.outputs.page_url }}"
+          for i in 1 2 3 4 5; do
+            if node scripts/verify_live.mjs "$url"; then exit 0; fi
+            echo "::warning::verify_live attempt $i failed; retrying after CDN propagation..."
+            sleep 15
+          done
+          echo "::error::Deployed data failed end-to-end verification"; exit 1

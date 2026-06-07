@@ -71,8 +71,34 @@ path, viewport-culled. LOD bands: overview r4 (<2.2) → mid r6 (2.2–4.5) → 
 ## Iteration loop
 1. Pull a backlog item into a sprint task.
 2. Architecture note (if non-trivial) → `docs/architecture.md`.
-3. Implement (typed, vectorized, modular). 4. `tsc + eslint + build` + Preview QA.
-5. Update this file + commit. 6. Deploy via CI.
+3. Implement (typed, vectorized, modular).
+4. **Verify (all layers below)** → 5. Update this file + commit → 6. Deploy via CI → 7. **Post-deploy gate**.
+
+## QA & verification loop
+
+Defense in depth — each layer catches what the previous cannot:
+
+| Layer | Mechanism | Catches |
+|---|---|---|
+| Data integrity | pipeline asserts (Σ pop ≈ 8.03 B, per-file < 100 MB, city spot-checks) | bad/incomplete data, CRS errors |
+| Static analysis | `tsc -b` + `eslint .` (CI) | type/lint regressions |
+| Build | `vite build` (CI) | bundler/import resolution (e.g. subpath imports) |
+| Local visual QA | Claude Preview: load, zoom-to-city, screenshot, console/network | render bugs, runtime errors, wrong fetches |
+| **Post-deploy E2E** | `npm run verify:live` — fetches + parses the **deployed** manifest/tiers/tile the way the browser does (whole-file + gzip); wired as the `verify-live` CI job after Pages deploy | **deploy-only** failures (CDN gzip+range, propagation, 404s) |
+| Live UI smoke | load the deployed URL in a real browser, confirm globe renders + 0 console errors | end-to-end prod rendering |
+
+**Open gap → closed:** local Preview uses the dev server (no gzip), so it could not surface the
+CDN gzip+range failure. `verify:live` + the live-UI smoke test now cover the deployed surface.
+
+### Postmortem — 2026-06-08: "parquet footer != PAR1" on live (overview failed to load)
+- **Symptom:** deployed globe showed only the dark sphere + an error overlay; data never loaded.
+- **Root cause:** GitHub Pages/Fastly gzip `.parquet` (`Content-Encoding: gzip`); hyparquet's
+  HTTP **range** reader computed offsets from the uncompressed size while the CDN applied ranges to
+  the **compressed** stream → wrong bytes → footer check failed. Local dev (no gzip) and `curl`
+  (no `Accept-Encoding: gzip`) both masked it; only the browser (always sends gzip) hit it.
+- **Fix:** `src/data/parquet.ts` now fetches each Parquet **whole** (browser decompresses) and parses
+  from memory — no range reads. Validated with `verify:live` against the live CDN (ALL PASS).
+- **Prevention:** `verify:live` tool + `verify-live` CI gate; QA loop now mandates a live E2E pass.
 
 ## Backlog (Sprint 3+)
 - Tooltip/fly-to search (geocode), share-state URL.
