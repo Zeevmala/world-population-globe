@@ -1,0 +1,34 @@
+{
+  "source": "Kontur Population",
+  "dataDate": "2023-11-01",
+  "license": "CC-BY 4.0",
+  "attribution": "\u00a9 Kontur (kontur.io), CC-BY 4.0 \u2014 GHSL, Meta, Microsoft, Copernicus, OSM",
+  "crs": "EPSG:4326",
+  "generatedAt": "2026-06-06T21:54:52Z",
+  "lods": [
+    {
+      "lod": "overview",
+      "file": "data/overview.parquet",
+      "h3Res": 4,
+      "approxKm": 22.0,
+      "minZoom": -2.0,
+      "maxZoom": 2.2,
+      "cellCount": 71283,
+      "maxPopulation": 22732636.0,
+      "sumPopulation": 8031924025.0,
+      "bytes": 1189500
+    },
+    {
+      "lod": "mid",
+      "file": "data/mid.parquet",
+      "h3Res": 6,
+      "approxKm": 3.0,
+      "minZoom": 2.2,
+      "maxZoom": 8.0,
+      "cellCount": 2016971,
+      "maxPopulation": 1949226.0,
+      "sumPopulation": 8031924024.0,
+      "bytes": 31277924
+    }
+  ]
+}
