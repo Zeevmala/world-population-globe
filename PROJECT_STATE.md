@@ -35,21 +35,38 @@ static deploy on GitHub Pages. See [`docs/architecture.md`](docs/architecture.md
 - [x] `index.html` references correct `/world-population-globe/` base; hashed JS/CSS resolve.
 - [ ] Manual live **zoom-in** smoke test of the `mid` (2 M-cell) tier (lazy load + cull path) — assets confirmed served; interactive pass pending.
 
-## Status: Sprint 2 — 400 m (r8) deep-zoom tile streaming ⏳
+## Status: Sprint 2 — 400 m (r8) deep-zoom tile streaming ✅ SHIPPED
 
 | # | Task | State |
 |---|---|---|
-| 7 | r8 tile pyramid: download + DuckDB partition by H3 parent + index | ⏳ in progress |
+| 7 | r8 tile pyramid: 32.96 M cells → 12,761 r3-parent Parquet tiles + index | ✅ done |
 | 8 | Client tile streaming (`useTileStreaming`) + visible-parent enumeration | ✅ done |
 | 9 | Wire r8 LOD band + rendering (`selectActive`, store r8 slice) | ✅ done |
-| 10 | Docs (architecture tiling section, this board) | ⏳ in progress |
-| 11 | Verify (integrity, zoom QA, build) | ☐ |
-| 12 | Deploy (commit, push, smoke test) | ☐ |
+| 10 | Docs (architecture tiling section, this board) | ✅ done |
+| 11 | Verify (integrity, zoom QA, build) | ✅ done |
+| 12 | Deploy (commit, push, smoke test) | ✅ done |
 
-Approach: r8 cells partitioned by a coarse H3 parent → many small Parquet tiles +
-`index.json`; client computes visible parents (h3-js `gridDisk`), fetches/LRU-caches/merges
-tiles per viewport, renders via the existing `H3HexagonLayer` path, viewport-culled.
-LOD bands: overview r4 (<2.2) → mid r6 (2.2–4.5) → r8 (≥4.5).
+Approach: r8 cells partitioned by H3 r3 parent → 12,761 small Parquet tiles (~32 KB mean,
+0.27 MB max) + `index.json`; client computes visible parents (h3-js `gridDisk`),
+fetches/LRU-caches/merges tiles per viewport, renders via the existing `H3HexagonLayer`
+path, viewport-culled. LOD bands: overview r4 (<2.2) → mid r6 (2.2–4.5) → r8 (≥4.5).
+
+### Verification log (Sprint 2)
+- Pipeline integrity: r8 = 32,957,699 cells, Σ pop = 8,031,924,024 ≈ 8.03 B (matches r4/r6);
+  Tokyo r3 tile = 13,586 cells / 23.4 M; densest 400 m cells in dense urban cores.
+- `tsc -b`, `eslint .`, `vite build` — clean (hyparquet `src/read.js` subpath resolves in build).
+- Preview QA: global hero intact; flew to Tokyo z5.6 → 16 r8 tiles streamed (206 range reads),
+  merged 65,892 cells, Kanto/Tokyo Bay rendered correctly at 400 m.
+- Fixed in QA: (a) `useGlobeData` was whole-loading the tiled r8 entry (`/undefined` fetch +
+  parquet error) → now skips tiled tiers + `loadLod` guard; (b) columns were giant spikes at
+  deep zoom → height now scales with cell footprint (`ELEVATION_PER_KM_M`).
+- Repo +502 MB (12,761 tiles, each ≪ 100 MB) — within GitHub Pages limits; in-repo (no CDN needed).
+
+### Deploy validation (Sprint 2)
+- [x] CI green (tsc + eslint + build); Pages deploy green (commit 69cb528).
+- [x] Live homepage + `manifest.json` (r8 entry) + `tiles/r8/index.json` + a tile return 200.
+- [x] Tile serves `Accept-Ranges: bytes` → in-browser per-viewport range streaming works in prod.
+- [ ] Manual live deep-zoom interactive pass (assets confirmed served; local Preview QA passed).
 
 ## Iteration loop
 1. Pull a backlog item into a sprint task.
