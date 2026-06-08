@@ -81,7 +81,7 @@ path, viewport-culled. LOD bands: overview r4 (<2.2) → mid r6 (2.2–4.5) → 
   **share-state deep-link** (Sprint 3 backlog) would make this pass fully scriptable, and a fly-to /
   zoom-control affordance would improve real-user deep navigation.
 
-## Status: Sprint 3 — Navigation & sharing 🚧 PLANNED
+## Status: Sprint 3 — Navigation & sharing 🚧 IN PROGRESS
 
 Theme: make the globe *navigable and shareable* — land somewhere meaningful on load, jump to any
 place by name, and share an exact view. Chosen from the Sprint 3 backlog (+ user-requested "start
@@ -89,7 +89,7 @@ more zoomed-in"); it also closes the live-QA gap above by making camera state sc
 
 | # | Task | Notes / files |
 |---|---|---|
-| 1 | Start zoomed-in + zoom controls | Bump `INITIAL_VIEW.zoom` 0.2 → ~1.0 (`store/useGlobeStore.ts`; keep `< 2.2` so overview stays the load tier; tune by eye in Preview). Add on-screen **+ / −** buttons that zoom **around center** — sidesteps the `around not supported in GlobeView` scroll-zoom limitation found in live QA. |
+| 1 | ✅ Start zoomed-in + zoom controls | `INITIAL_VIEW.zoom` 0.2 → 1 (overview stays the load tier); `zoomBy()` (center-only, clamped −1…7) + on-screen **+ / −** buttons in `Controls.tsx`. Center-zoom sidesteps `around not supported in GlobeView`. **Preview-verified:** +/− span 22 → 3 → 0.4 km (mid + r8 stream), reverses, clamps, 0 console errors, no `around` warning. |
 | 2 | Geocode search | Search box in `Header`; forward-geocode via **Nominatim (OSM)** — no API key (matches "no secrets"), debounced, with required UA + attribution. Fallback: small bundled top-cities gazetteer (offline, zero-dep). Returns `{lat,lng}`. |
 | 3 | Animated fly-to | On search-result / zoom-control action, animate via deck.gl `FlyToInterpolator` (`transitionDuration` + `transitionInterpolator`) through the controlled `viewState` (`Globe.tsx`); auto-pause rotation during the fly. |
 | 4 | URL ↔ viewState deep-link | Debounced sync of `lng/lat/zoom` to the URL hash; parse on load to seed `INITIAL_VIEW`; "Copy link" share button. **Bonus:** makes the live interactive QA fully scriptable (removes the real-mouse dependency above). |

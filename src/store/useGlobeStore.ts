@@ -4,7 +4,9 @@ import type { GlobeViewState, HoverInfo, LodData, Manifest } from '../types'
 const INITIAL_VIEW: GlobeViewState = {
   longitude: 25,
   latitude: 20,
-  zoom: 0.2,
+  // Seats the globe as a larger hero on load; stays < the mid band (2.2) so the
+  // coarse `overview` tier remains the on-load tier (no eager 31 MB mid fetch).
+  zoom: 1,
   minZoom: -1,
   maxZoom: 7,
 }
@@ -30,6 +32,7 @@ interface GlobeStore {
   setHover: (h: HoverInfo | null) => void
   setViewState: (v: GlobeViewState) => void
   rotateBy: (deg: number) => void
+  zoomBy: (delta: number) => void
   toggleAutoRotate: () => void
   setAutoRotate: (on: boolean) => void
 }
@@ -57,6 +60,14 @@ export const useGlobeStore = create<GlobeStore>((set) => ({
     set((s) => ({
       viewState: { ...s.viewState, longitude: wrapLng(s.viewState.longitude + deg) },
     })),
+  // Center-only zoom (lng/lat fixed) — the zoom mode GlobeView supports, unlike
+  // cursor-anchored scroll-zoom. Clamped to the view's min/max.
+  zoomBy: (delta) =>
+    set((s) => {
+      const { zoom, minZoom = -2, maxZoom = 8 } = s.viewState
+      const next = Math.min(maxZoom, Math.max(minZoom, zoom + delta))
+      return { viewState: { ...s.viewState, zoom: next } }
+    }),
   toggleAutoRotate: () => set((s) => ({ autoRotate: !s.autoRotate })),
   setAutoRotate: (autoRotate) => set({ autoRotate }),
 }))
