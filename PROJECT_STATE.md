@@ -33,7 +33,10 @@ static deploy on GitHub Pages. See [`docs/architecture.md`](docs/architecture.md
 - [x] Live page + all data assets return 200; `Accept-Ranges: bytes` present
       (overview 1.2 MB, mid 31 MB) → in-browser Parquet column reads work under the subpath.
 - [x] `index.html` references correct `/world-population-globe/` base; hashed JS/CSS resolve.
-- [ ] Manual live **zoom-in** smoke test of the `mid` (2 M-cell) tier (lazy load + cull path) — assets confirmed served; interactive pass pending.
+- [x] Manual live **zoom-in** smoke test of the `mid` (2 M-cell) tier (lazy load + cull path).
+      **Live interactive QA (2026-06-08):** zoomed into Cairo on the deployed site — HUD flipped to
+      `3 km cells · 2,016,971 loaded` (full r6 tier lazy-loaded + parsed over the CDN), live hover at
+      r6 res (`863e63cd7ffffff`), **0 console errors**.
 
 ## Status: Sprint 2 — 400 m (r8) deep-zoom tile streaming ✅ SHIPPED
 
@@ -66,7 +69,17 @@ path, viewport-culled. LOD bands: overview r4 (<2.2) → mid r6 (2.2–4.5) → 
 - [x] CI green (tsc + eslint + build); Pages deploy green (commit 69cb528).
 - [x] Live homepage + `manifest.json` (r8 entry) + `tiles/r8/index.json` + a tile return 200.
 - [x] Tile serves `Accept-Ranges: bytes` → in-browser per-viewport range streaming works in prod.
-- [ ] Manual live deep-zoom interactive pass (assets confirmed served; local Preview QA passed).
+- [x] Manual live deep-zoom interactive pass.
+      **Live interactive QA (2026-06-08):** continued into central Cairo — HUD flipped to
+      `0.4 km cells · 46,744 loaded` (r8 r3-parent tiles streamed + merged for the viewport), live
+      hover on a real r8 cell (`883e662e31fffff`, ≈5,634 /km²), 400 m columns rendered across the
+      Cairo metro + Nile Delta, **0 console errors**.
+- **QA method note:** the deployed globe was driven by a real mouse (operator-assisted) and observed
+  via Chrome MCP (HUD / hover / console oracles). Automated synthetic-wheel zoom proved unreliable on
+  `GlobeView` — deck warns `around not supported in GlobeView` (scroll-zoom is cursor-anchored, but
+  GlobeView only zooms around center), so synthetic wheel input accumulated zoom glacially. The
+  **share-state deep-link** (Sprint 3 backlog) would make this pass fully scriptable, and a fly-to /
+  zoom-control affordance would improve real-user deep navigation.
 
 ## Iteration loop
 1. Pull a backlog item into a sprint task.
