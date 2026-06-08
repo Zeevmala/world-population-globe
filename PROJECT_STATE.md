@@ -81,6 +81,29 @@ path, viewport-culled. LOD bands: overview r4 (<2.2) → mid r6 (2.2–4.5) → 
   **share-state deep-link** (Sprint 3 backlog) would make this pass fully scriptable, and a fly-to /
   zoom-control affordance would improve real-user deep navigation.
 
+## Status: Sprint 3 — Navigation & sharing 🚧 PLANNED
+
+Theme: make the globe *navigable and shareable* — land somewhere meaningful on load, jump to any
+place by name, and share an exact view. Chosen from the Sprint 3 backlog (+ user-requested "start
+more zoomed-in"); it also closes the live-QA gap above by making camera state scriptable via the URL.
+
+| # | Task | Notes / files |
+|---|---|---|
+| 1 | Start zoomed-in + zoom controls | Bump `INITIAL_VIEW.zoom` 0.2 → ~1.0 (`store/useGlobeStore.ts`; keep `< 2.2` so overview stays the load tier; tune by eye in Preview). Add on-screen **+ / −** buttons that zoom **around center** — sidesteps the `around not supported in GlobeView` scroll-zoom limitation found in live QA. |
+| 2 | Geocode search | Search box in `Header`; forward-geocode via **Nominatim (OSM)** — no API key (matches "no secrets"), debounced, with required UA + attribution. Fallback: small bundled top-cities gazetteer (offline, zero-dep). Returns `{lat,lng}`. |
+| 3 | Animated fly-to | On search-result / zoom-control action, animate via deck.gl `FlyToInterpolator` (`transitionDuration` + `transitionInterpolator`) through the controlled `viewState` (`Globe.tsx`); auto-pause rotation during the fly. |
+| 4 | URL ↔ viewState deep-link | Debounced sync of `lng/lat/zoom` to the URL hash; parse on load to seed `INITIAL_VIEW`; "Copy link" share button. **Bonus:** makes the live interactive QA fully scriptable (removes the real-mouse dependency above). |
+| 5 | Wire UI + a11y | Search + share + zoom controls into `Header`/HUD; reuse the existing hover `InfoPanel`; keyboard-accessible results. |
+| 6 | Verify | `tsc -b` + `eslint .` + `vite build`; Preview QA: search a city → fly-to lands, URL updates, reload restores view, both `mid`+`r8` bands still stream; `verify:live` unaffected (no data change). |
+| 7 | Deploy + post-deploy gate | Commit, push, CI/Pages; live UI smoke — now deep-link-driven. |
+
+Architecture note to add (`docs/architecture.md`) when implementing: geocoder choice (Nominatim vs
+bundled gazetteer), fly-to interpolator, URL deep-link schema, and center-zoom controls for GlobeView.
+
+**Open implementation fork (resolve at build):** Nominatim (full global coverage, live, 3rd-party
+usage policy) vs a bundled gazetteer (offline, limited). Recommendation: **Nominatim** + debounce +
+attribution; gazetteer as the documented fallback.
+
 ## Iteration loop
 1. Pull a backlog item into a sprint task.
 2. Architecture note (if non-trivial) → `docs/architecture.md`.
@@ -113,8 +136,8 @@ CDN gzip+range failure. `verify:live` + the live-UI smoke test now cover the dep
   from memory — no range reads. Validated with `verify:live` against the live CDN (ALL PASS).
 - **Prevention:** `verify:live` tool + `verify-live` CI gate; QA loop now mandates a live E2E pass.
 
-## Backlog (Sprint 3+)
-- Tooltip/fly-to search (geocode), share-state URL.
+## Backlog (Sprint 4+)
+- ↳ pulled into **Sprint 3**: geocode search + fly-to + share-state deep-link (+ default zoom-in, zoom controls).
 - Bilingual RTL (he/en) UI; PWA offline; night-lights basemap toggle.
 - Code-split deck.gl (dynamic import) to cut the ~1 MB bundle.
 - OG/social meta + pre-publish QA (see `github-portfolio-deploy`).
