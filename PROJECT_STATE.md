@@ -81,7 +81,7 @@ path, viewport-culled. LOD bands: overview r4 (<2.2) → mid r6 (2.2–4.5) → 
   **share-state deep-link** (Sprint 3 backlog) would make this pass fully scriptable, and a fly-to /
   zoom-control affordance would improve real-user deep navigation.
 
-## Status: Sprint 3 — Navigation & sharing 🚧 IN PROGRESS
+## Status: Sprint 3 — Navigation & sharing ✅ SHIPPED
 
 Theme: make the globe *navigable and shareable* — land somewhere meaningful on load, jump to any
 place by name, and share an exact view. Chosen from the Sprint 3 backlog (+ user-requested "start
@@ -93,9 +93,9 @@ more zoomed-in"); it also closes the live-QA gap above by making camera state sc
 | 2 | ✅ Geocode search | `lib/geocode.ts` (Nominatim/OSM, no key; browser `Referer` satisfies the usage policy) + `components/Search.tsx` (top-center; 350 ms debounce, `AbortController`, keyboard nav ↑/↓/Enter/Esc). **Preview-verified:** query "Tokyo" → Nominatim 200 → "Tokyo, Japan" result; select fires `flyTo`; 0 console errors. |
 | 3 | ✅ Animated fly-to | Done with #2. `flyTo(lng,lat,zoom?)` store action sets a `flyTarget`; `Globe.tsx` eases the camera over 1.6 s via a **time-based rAF tween** (shortest-path longitude, ease-in-out-cubic), reusing the proven auto-rotate rAF pattern — **not** deck's `FlyToInterpolator`, which assumes Web Mercator and misbehaves on `GlobeView`. Auto-rotation stops on fly. |
 | 4 | ✅ URL ↔ viewState deep-link | `lib/urlState.ts` (`parseHash`/`formatHash`/`viewUrl`, `#lng/lat/zoom`); store seeds `INITIAL_VIEW` from the hash + sets `autoRotate:!hash`; `Globe.tsx` debounced `replaceState` (only when `!autoRotate`); `Controls.tsx` "🔗 Share view" button. **Preview-verified (no render needed):** interact → `#139.7000/35.6800/5.00`; reload that URL → view seeded + rotation off; 0 console errors. Bonus: live QA is now scriptable via deep-link. |
-| 5 | Wire UI + a11y | Search + share + zoom controls into `Header`/HUD; reuse the existing hover `InfoPanel`; keyboard-accessible results. |
-| 6 | Verify | `tsc -b` + `eslint .` + `vite build`; Preview QA: search a city → fly-to lands, URL updates, reload restores view, both `mid`+`r8` bands still stream; `verify:live` unaffected (no data change). |
-| 7 | Deploy + post-deploy gate | Commit, push, CI/Pages; live UI smoke — now deep-link-driven. |
+| 5 | ✅ Wire UI + a11y | Search (top-center) + Share + zoom controls all wired in `App.tsx`/`Controls.tsx`; hover `InfoPanel` reused. Added full **combobox ARIA** to `Search.tsx` (`role=combobox/listbox/option`, `aria-expanded`/`-controls`/`-activedescendant`/`-selected`) on top of the existing `aria-label` + ↑/↓/Enter/Esc. |
+| 6 | ✅ Verify | `tsc -b` + `eslint .` + `vite build` clean; **`npm run verify:live` ALL PASS** (overview/mid/r8 fetch+parse on the CDN, Σ≈8.03 B); Preview: search→fly-to→hash round-trip. |
+| 7 | ✅ Deploy + post-deploy gate | Auto-deployed via Pages. **Live smoke (deep-link-driven):** bare load → zoom-2 hero + Search/Share/zoom UI, 0 console errors; search "Tokyo" → Nominatim "Tokyo, Japan"; deep-link `#139.70/35.68/5.00` → **r8 Kanto/Tokyo rendered at 400 m**, hash round-trips, rotation off, 0 errors. (#3 fly-to *animation* rAF-wedged in the test browser — Preview-verified.) |
 
 Architecture note to add (`docs/architecture.md`) when implementing: geocoder choice (Nominatim vs
 bundled gazetteer), fly-to interpolator, URL deep-link schema, and center-zoom controls for GlobeView.

@@ -79,11 +79,24 @@ export function Search() {
         onBlur={() => setTimeout(() => setOpen(false), 150)}
         placeholder="Search a place…"
         aria-label="Search for a place"
+        role="combobox"
+        aria-expanded={open}
+        aria-controls="place-results"
+        aria-autocomplete="list"
+        aria-activedescendant={open && results.length ? `place-opt-${active}` : undefined}
         className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white/90 shadow-lg backdrop-blur-md outline-none placeholder:text-white/40 focus:border-white/30"
       />
       {open && (
-        <ul className="mt-1 max-h-72 overflow-auto rounded-lg border border-white/10 bg-black/70 text-sm shadow-lg backdrop-blur-md">
-          {loading && <li className="px-3 py-2 text-white/50">Searching…</li>}
+        <ul
+          id="place-results"
+          role="listbox"
+          className="mt-1 max-h-72 overflow-auto rounded-lg border border-white/10 bg-black/70 text-sm shadow-lg backdrop-blur-md"
+        >
+          {loading && (
+            <li className="px-3 py-2 text-white/50" role="status">
+              Searching…
+            </li>
+          )}
           {!loading && results.length === 0 && (
             <li className="px-3 py-2 text-white/50">No results</li>
           )}
@@ -91,6 +104,9 @@ export function Search() {
             <li key={`${r.name}-${i}`}>
               <button
                 type="button"
+                role="option"
+                id={`place-opt-${i}`}
+                aria-selected={i === active}
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => choose(r)}
                 className={`block w-full px-3 py-2 text-left text-white/80 transition hover:bg-white/10 ${
