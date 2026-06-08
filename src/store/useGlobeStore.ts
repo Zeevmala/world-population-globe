@@ -6,7 +6,7 @@ const INITIAL_VIEW: GlobeViewState = {
   latitude: 20,
   // Seats the globe as a larger hero on load; stays < the mid band (2.2) so the
   // coarse `overview` tier remains the on-load tier (no eager 31 MB mid fetch).
-  zoom: 1,
+  zoom: 2,
   minZoom: -1,
   maxZoom: 7,
 }

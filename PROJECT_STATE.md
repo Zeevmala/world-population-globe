@@ -89,7 +89,7 @@ more zoomed-in"); it also closes the live-QA gap above by making camera state sc
 
 | # | Task | Notes / files |
 |---|---|---|
-| 1 | ✅ Start zoomed-in + zoom controls | `INITIAL_VIEW.zoom` 0.2 → 1 (overview stays the load tier); `zoomBy()` (center-only, clamped −1…7) + on-screen **+ / −** buttons in `Controls.tsx`. Center-zoom sidesteps `around not supported in GlobeView`. **Preview-verified:** +/− span 22 → 3 → 0.4 km (mid + r8 stream), reverses, clamps, 0 console errors, no `around` warning. |
+| 1 | ✅ Start zoomed-in + zoom controls | `INITIAL_VIEW.zoom` 0.2 → 2 (overview stays the load tier); `zoomBy()` (center-only, clamped −1…7) + on-screen **+ / −** buttons in `Controls.tsx`; removed the cell-count HUD chip. Center-zoom sidesteps `around not supported in GlobeView`. **Preview-verified:** +/− span 22 → 3 → 0.4 km (mid + r8 stream), reverses, clamps, 0 console errors, no `around` warning. |
 | 2 | Geocode search | Search box in `Header`; forward-geocode via **Nominatim (OSM)** — no API key (matches "no secrets"), debounced, with required UA + attribution. Fallback: small bundled top-cities gazetteer (offline, zero-dep). Returns `{lat,lng}`. |
 | 3 | Animated fly-to | On search-result / zoom-control action, animate via deck.gl `FlyToInterpolator` (`transitionDuration` + `transitionInterpolator`) through the controlled `viewState` (`Globe.tsx`); auto-pause rotation during the fly. |
 | 4 | URL ↔ viewState deep-link | Debounced sync of `lng/lat/zoom` to the URL hash; parse on load to seed `INITIAL_VIEW`; "Copy link" share button. **Bonus:** makes the live interactive QA fully scriptable (removes the real-mouse dependency above). |
