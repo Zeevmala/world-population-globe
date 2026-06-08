@@ -1,12 +1,17 @@
 import { create } from 'zustand'
 import type { GlobeViewState, HoverInfo, LodData, Manifest } from '../types'
+import { parseHash } from '../lib/urlState'
+
+// A `#lng/lat/zoom` deep-link (if present) seeds the camera and disables the
+// idle auto-spin so the shared view stays put.
+const HASH_VIEW = parseHash()
 
 const INITIAL_VIEW: GlobeViewState = {
-  longitude: 25,
-  latitude: 20,
+  longitude: HASH_VIEW?.longitude ?? 25,
+  latitude: HASH_VIEW?.latitude ?? 20,
   // Seats the globe as a larger hero on load; stays < the mid band (2.2) so the
   // coarse `overview` tier remains the on-load tier (no eager 31 MB mid fetch).
-  zoom: 2,
+  zoom: HASH_VIEW?.zoom ?? 2,
   minZoom: -1,
   maxZoom: 7,
 }
@@ -58,7 +63,7 @@ export const useGlobeStore = create<GlobeStore>((set) => ({
   error: null,
   hover: null,
   viewState: INITIAL_VIEW,
-  autoRotate: true,
+  autoRotate: !HASH_VIEW,
   flyTarget: null,
 
   setManifest: (manifest) => set({ manifest }),

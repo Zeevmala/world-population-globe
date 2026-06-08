@@ -11,6 +11,7 @@ import { useGlobeStore } from '../store/useGlobeStore'
 import { useGlobeLayers } from '../layers/useGlobeLayers'
 import { useGlobeData } from '../data/useGlobeData'
 import { useTileStreaming } from '../data/useTileStreaming'
+import { formatHash } from '../lib/urlState'
 
 const GLOBE_VIEW = new GlobeView({ id: 'globe' })
 
@@ -80,6 +81,17 @@ export function Globe() {
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
   }, [flyTarget, setViewState])
+
+  // Sync the camera to the URL hash (debounced) so a reload restores the view and
+  // "Share" yields a deep-link. Skipped while idly auto-spinning (no URL churn);
+  // `replaceState` keeps the back-stack clean.
+  useEffect(() => {
+    if (autoRotate) return
+    const t = setTimeout(() => {
+      history.replaceState(null, '', formatHash(viewState))
+    }, 400)
+    return () => clearTimeout(t)
+  }, [viewState, autoRotate])
 
   return (
     <DeckGL
