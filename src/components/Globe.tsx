@@ -32,6 +32,7 @@ export function Globe() {
   const autoRotate = useGlobeStore((s) => s.autoRotate)
   const setAutoRotate = useGlobeStore((s) => s.setAutoRotate)
   const rotateBy = useGlobeStore((s) => s.rotateBy)
+  const flyTarget = useGlobeStore((s) => s.flyTarget)
 
   useEffect(() => {
     if (!autoRotate) return
@@ -45,6 +46,40 @@ export function Globe() {
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
   }, [autoRotate, rotateBy])
+
+  // Animated fly-to: ease the camera from the current view to `flyTarget` over ~1.6 s.
+  // A manual rAF tween (like auto-rotate above) is used instead of deck's
+  // FlyToInterpolator, which assumes Web Mercator and misbehaves on GlobeView.
+  useEffect(() => {
+    if (!flyTarget) return
+    const start = useGlobeStore.getState().viewState
+    const startLng = start.longitude
+    const startLat = start.latitude
+    const startZoom = start.zoom
+    let dLng = flyTarget.longitude - startLng
+    dLng -= 360 * Math.round(dLng / 360) // shortest way around the globe
+    const dLat = flyTarget.latitude - startLat
+    const dZoom = flyTarget.zoom - startZoom
+    const DURATION = 1600
+    const ease = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2)
+
+    let raf = 0
+    const t0 = performance.now()
+    const tick = (now: number) => {
+      const t = Math.min(1, (now - t0) / DURATION)
+      const e = ease(t)
+      const lng = startLng + dLng * e
+      setViewState({
+        ...useGlobeStore.getState().viewState,
+        longitude: ((((lng + 180) % 360) + 360) % 360) - 180,
+        latitude: startLat + dLat * e,
+        zoom: startZoom + dZoom * e,
+      })
+      if (t < 1) raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [flyTarget, setViewState])
 
   return (
     <DeckGL

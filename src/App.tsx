@@ -1,5 +1,6 @@
 import { Globe } from './components/Globe'
 import { Header } from './components/Header'
+import { Search } from './components/Search'
 import { Controls } from './components/Controls'
 import { Legend } from './components/Legend'
 import { InfoPanel } from './components/InfoPanel'
@@ -27,6 +28,9 @@ export default function App() {
       <div className="pointer-events-none absolute inset-0 z-20">
         <div className="pointer-events-auto absolute left-4 top-4">
           <Header />
+        </div>
+        <div className="pointer-events-auto absolute left-1/2 top-4 hidden -translate-x-1/2 sm:block">
+          <Search />
         </div>
         <div className="pointer-events-auto absolute right-4 top-4">
           <Controls />

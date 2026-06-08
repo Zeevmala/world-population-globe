@@ -13,6 +13,14 @@ const INITIAL_VIEW: GlobeViewState = {
 
 type Status = 'idle' | 'loading' | 'ready' | 'error'
 
+/** A requested camera destination; `id` makes repeat flights to the same place retrigger. */
+export interface FlyTarget {
+  longitude: number
+  latitude: number
+  zoom: number
+  id: number
+}
+
 interface GlobeStore {
   manifest: Manifest | null
   data: Record<string, LodData>
@@ -23,6 +31,8 @@ interface GlobeStore {
   hover: HoverInfo | null
   viewState: GlobeViewState
   autoRotate: boolean
+  /** Pending fly-to destination (animated by `Globe`); null when idle. */
+  flyTarget: FlyTarget | null
 
   setManifest: (m: Manifest) => void
   addData: (d: LodData) => void
@@ -33,6 +43,7 @@ interface GlobeStore {
   setViewState: (v: GlobeViewState) => void
   rotateBy: (deg: number) => void
   zoomBy: (delta: number) => void
+  flyTo: (lng: number, lat: number, zoom?: number) => void
   toggleAutoRotate: () => void
   setAutoRotate: (on: boolean) => void
 }
@@ -48,6 +59,7 @@ export const useGlobeStore = create<GlobeStore>((set) => ({
   hover: null,
   viewState: INITIAL_VIEW,
   autoRotate: true,
+  flyTarget: null,
 
   setManifest: (manifest) => set({ manifest }),
   addData: (d) => set((s) => ({ data: { ...s.data, [d.lod]: d } })),
@@ -68,6 +80,18 @@ export const useGlobeStore = create<GlobeStore>((set) => ({
       const next = Math.min(maxZoom, Math.max(minZoom, zoom + delta))
       return { viewState: { ...s.viewState, zoom: next } }
     }),
+  // Request an animated flight (run by `Globe`); stops auto-rotation. Defaults to a
+  // city-scale zoom (5 → r8 streams in) unless the current view is already deeper.
+  flyTo: (lng, lat, zoom) =>
+    set((s) => ({
+      autoRotate: false,
+      flyTarget: {
+        longitude: lng,
+        latitude: lat,
+        zoom: zoom ?? Math.max(s.viewState.zoom, 5),
+        id: Date.now(),
+      },
+    })),
   toggleAutoRotate: () => set((s) => ({ autoRotate: !s.autoRotate })),
   setAutoRotate: (autoRotate) => set({ autoRotate }),
 }))
