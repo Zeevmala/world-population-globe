@@ -9,9 +9,10 @@ const HASH_VIEW = parseHash()
 const INITIAL_VIEW: GlobeViewState = {
   longitude: HASH_VIEW?.longitude ?? 25,
   latitude: HASH_VIEW?.latitude ?? 20,
-  // Seats the globe as a larger hero on load; stays < the mid band (2.2) so the
-  // coarse `overview` tier remains the on-load tier (no eager 31 MB mid fetch).
-  zoom: HASH_VIEW?.zoom ?? 2,
+  // Seats the globe as a hero on load (one zoom level out from the prior default);
+  // stays < the mid band (2.2) so the coarse `overview` tier remains the on-load
+  // tier (no eager 31 MB mid fetch).
+  zoom: HASH_VIEW?.zoom ?? 1.3,
   minZoom: -1,
   maxZoom: 7,
 }

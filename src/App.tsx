@@ -1,4 +1,4 @@
-import { Globe } from './components/Globe'
+import { lazy, Suspense } from 'react'
 import { Header } from './components/Header'
 import { Search } from './components/Search'
 import { Controls } from './components/Controls'
@@ -8,13 +8,20 @@ import { Attribution } from './components/Attribution'
 import { Loader } from './components/Loader'
 import { useGlobeStore } from './store/useGlobeStore'
 
+// deck.gl + luma.gl + h3-js + hyparquet (~1 MB) are reachable only through `Globe`.
+// Lazy-load it so the UI shell + a spinner paint from a small entry chunk while the
+// heavy globe chunk streams in asynchronously (named export → default for `lazy`).
+const Globe = lazy(() => import('./components/Globe').then((m) => ({ default: m.Globe })))
+
 export default function App() {
   const status = useGlobeStore((s) => s.status)
   const error = useGlobeStore((s) => s.error)
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-[#05070d]">
-      <Globe />
+      <Suspense fallback={<Loader message="Loading globe…" />}>
+        <Globe />
+      </Suspense>
 
       {/* Vignette to seat the globe in space; passes pointer events to canvas. */}
       <div
