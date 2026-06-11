@@ -28,5 +28,4 @@ in-browser columnar reads, truthful cartography) with zero backend.
 
 ## Out of scope (decided)
 
-- Hebrew/RTL bilingual UI (dropped — Sprint 4 scope decision).
 - Server-side rendering or any dynamic API.
