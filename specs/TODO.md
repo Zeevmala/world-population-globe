@@ -23,11 +23,16 @@ REPORT  : conventional commits + `[x]` flips here; sprint-level summary → PROJ
 
 ## Queue
 
-- [ ] Responsive mobile framing: on tall portrait (375×812) the globe sits small and high
+- [x] Responsive mobile framing: on tall portrait (375×812) the globe sits small and high
       with dead space below (Sprint 4 QA note). Add a responsive default zoom and/or vertical
       re-centering (`store/useGlobeStore.ts`, `components/Globe.tsx`). Accept: globe visually
       centered and filling the width on a 375×812 preview; desktop zoom-1.3 hero unchanged;
       URL deep-link override still wins; `npm run verify` green; 0 console errors.
+      *(Done 2026-06-11: viewport-aware `defaultZoom()` in `useGlobeStore.ts` — portrait
+      h > w×1.4 → 1.9, else 1.3; both < mid band 2.2. Verified: `npm run verify` exit 0;
+      preview oracles 1280×800 → 1.3, 375×812 → 1.9, hash `#139.7/35.68/5` wins on portrait;
+      0 console errors. Preview screenshot capture timed out on the WebGL canvas — visual
+      check by zoom-ratio proxy (2^0.6 ≈ 1.52× diameter ≈ full 375 px width).)*
 - [ ] Tile prefetch on pan: `src/data/useTileStreaming.ts` fetches visible r3 parents only;
       prefetch the gridDisk ring k+1 when the viewport is idle so panning at r8 doesn't flash
       empty tiles. Accept: pan at zoom ≥ 4.5 in preview shows no empty-tile flash; LRU cap

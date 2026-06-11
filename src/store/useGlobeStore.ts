@@ -6,13 +6,17 @@ import { parseHash } from '../lib/urlState'
 // idle auto-spin so the shared view stays put.
 const HASH_VIEW = parseHash()
 
+// Default hero zoom is viewport-aware: on tall-portrait screens the 1.3 framing
+// leaves the globe small with dead space below, so tighten to 1.9. Both values stay
+// < the mid band (2.2) so the coarse `overview` tier remains the on-load tier
+// (no eager 31 MB mid fetch). Load-time only — deep-links and user zoom always win.
+const defaultZoom = (): number =>
+  window.innerHeight > window.innerWidth * 1.4 ? 1.9 : 1.3
+
 const INITIAL_VIEW: GlobeViewState = {
   longitude: HASH_VIEW?.longitude ?? 25,
   latitude: HASH_VIEW?.latitude ?? 20,
-  // Seats the globe as a hero on load (one zoom level out from the prior default);
-  // stays < the mid band (2.2) so the coarse `overview` tier remains the on-load
-  // tier (no eager 31 MB mid fetch).
-  zoom: HASH_VIEW?.zoom ?? 1.3,
+  zoom: HASH_VIEW?.zoom ?? defaultZoom(),
   minZoom: -1,
   maxZoom: 7,
 }
