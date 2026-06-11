@@ -124,10 +124,20 @@ scope decision; PWA offline + night-lights basemap remain in the backlog.)
 - **Mobile** (375×812): chrome is responsive — Search correctly hidden (`sm:block`), Header/Controls/Legend/Attribution positioned without overlap. *Observation:* on tall portrait the globe sits small & high with empty space below — a responsive default-zoom (or vertical re-centering) is a backlog candidate, **not** a Sprint-4 regression.
 
 ## Iteration loop
+
+Human / sprint cadence (this file is the PM log):
 1. Pull a backlog item into a sprint task.
 2. Architecture note (if non-trivial) → `docs/architecture.md`.
 3. Implement (typed, vectorized, modular).
 4. **Verify (all layers below)** → 5. Update this file + commit → 6. Deploy via CI → 7. **Post-deploy gate**.
+
+Autonomous cadence (loop-engineering scaffolding, added 2026-06-11):
+- **Queue + loop contract:** [`specs/TODO.md`](specs/TODO.md) — the loop's spine; one item = one tick = one commit.
+- **Anchors read every tick:** [`CLAUDE.md`](CLAUDE.md) operating rules + invariants; [`VISION.md`](VISION.md) north star.
+- **Per-tick prompt:** [`PROMPT.md`](PROMPT.md); **runner:** [`Invoke-RalphLoop.ps1`](Invoke-RalphLoop.ps1)
+  (max-iter cap, no-progress ×3 halt, line-anchored `BLOCKED:` sentinel, per-iteration logs; worktree-only).
+- **`/loop` maintenance default:** [`.claude/loop.md`](.claude/loop.md) (uncommitted work → CI/deploy health → `verify:live` → queue).
+- **Verifier:** `npm run verify` (eslint + tsc + vite build, one exit code) locally; CI + `verify-live` post-deploy.
 
 ## QA & verification loop
 
@@ -156,10 +166,14 @@ CDN gzip+range failure. `verify:live` + the live-UI smoke test now cover the dep
 - **Prevention:** `verify:live` tool + `verify-live` CI gate; QA loop now mandates a live E2E pass.
 
 ## Backlog (Sprint 5+)
+
+> The actionable queue now lives in [`specs/TODO.md`](specs/TODO.md) (loop-sized items with
+> Accept criteria). This list is the sprint-level history.
+
 - ↳ pulled into **Sprint 3**: geocode search + fly-to + share-state deep-link (+ default zoom-in, zoom controls).
 - ↳ pulled into **Sprint 4**: code-split deck.gl; OG/social meta + preview image; default zoom-out.
-- PWA offline; night-lights basemap toggle.
-- Responsive default-zoom / mobile globe framing (globe sits small & high on tall portrait).
+- ↳ queued in **specs/TODO.md**: responsive mobile framing; r8 tile prefetch on pan; night-lights basemap toggle.
+- PWA offline; time-series animation (needs breakdown — see specs/TODO.md backlog).
 - (Bilingual RTL he/en UI — dropped per scope decision.)
 
 ## Data provenance

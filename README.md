@@ -38,6 +38,7 @@ works without re-running the pipeline.
 | `npm run data` | Regenerate LOD Parquet tiles + manifest (`pipeline/build_lods.py`) |
 | `npm run typecheck` | `tsc -b` |
 | `npm run lint` | ESLint |
+| `npm run verify` | Lint + typecheck + production build — one exit code (the loop verifier) |
 | `npm run build` | Typecheck + production build → `dist/` |
 | `npm run preview` | Serve the production build |
 
@@ -50,7 +51,8 @@ works without re-running the pipeline.
   tier loads lazily on zoom-in and is viewport-culled + capped for performance. Population is
   `log1p`-normalized into the Inferno ramp for both column height and color.
 - **Architecture** — see [`docs/architecture.md`](docs/architecture.md). Roadmap & status in
-  [`PROJECT_STATE.md`](PROJECT_STATE.md).
+  [`PROJECT_STATE.md`](PROJECT_STATE.md); work queue + autonomous-iteration loop contract in
+  [`specs/TODO.md`](specs/TODO.md).
 
 ## Data & license
 

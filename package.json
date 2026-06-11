@@ -10,6 +10,7 @@
     "typecheck": "tsc -b",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
+    "verify": "npm run lint && npm run build",
     "verify:live": "node scripts/verify_live.mjs",
     "preview": "vite preview"
   },
