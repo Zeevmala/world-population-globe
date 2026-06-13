@@ -123,6 +123,35 @@ scope decision; PWA offline + night-lights basemap remain in the backlog.)
 - **Desktop** (primary surface): hero globe at zoom 1.3 renders crisply; Inferno towers, search/share/zoom all functional; 0 console errors.
 - **Mobile** (375×812): chrome is responsive — Search correctly hidden (`sm:block`), Header/Controls/Legend/Attribution positioned without overlap. *Observation:* on tall portrait the globe sits small & high with empty space below — a responsive default-zoom (or vertical re-centering) is a backlog candidate, **not** a Sprint-4 regression.
 
+## Status: Sprint 5 — interaction performance ✅ SHIPPED
+
+Theme: the globe rendered slowly when panned (user report, even at the overview tier). The
+dominant cost turned out to be paid *per pointer event* during a drag — invisible to a synthetic
+`setViewState` benchmark — so the fix is structural, verified by mechanism + visuals, not a frame
+delta. Three commits (one per loop item).
+
+| # | Task | Notes / files |
+|---|---|---|
+| 1 | ✅ Baseline render cost | `perf: cut globe pan cost` (93ff0eb9). `useDevicePixels ≤ 1.5` cap + instanced columns (`highPrecision: false`) + **picking disabled while dragging** (`isDragging` store flag → `pickable`, set from `onInteractionStateChange`). The picking-skip is the real "slow when panned" lever — a pickable layer re-rendered the picking buffer on every `pointermove`. Files: `Globe.tsx`, `useGlobeLayers.ts`, `useGlobeStore.ts` (+ dev-only `__deck` QA handle). |
+| 2 | ✅ Cull cadence | `perf: re-cull less often…` (27209552). `cullKeyFor` quantizes the camera to `halfSpan/4` (re-cull ~5–10× less often vs the old 1°); `cullForView` scans a `1.5×halfSpan` margin (no edge-pop) and fills the 120 k cap via O(n) `topKByPopulation` quickselect instead of an O(n log n) sort of ~1 M indices. File: `lib/lod.ts`. |
+| 3 | ✅ r8 tile prefetch | `feat: prefetch the next r8 tile ring…` (699483e8). `prefetchParents()` (gridDisk k+1 shell) + idle `requestIdleCallback` warms the next ring into the LRU cache (no `setR8Data`) with visible-protecting eviction. Files: `lib/tiles.ts`, `useTileStreaming.ts`. |
+
+### Verification log (Sprint 5)
+- `npm run verify` exit 0 after each commit (eslint + tsc + vite build).
+- **Live oracles** (`window.__globe` / new `__deck`, real Chrome — synthetic-canvas screenshots OK
+  via computer-use, not preview): effPx **1.5**, instanced sublayer active, `pickable` true→false→true
+  across idle/drag/release; overview (Africa) + r8 (Tokyo) render artifact-free.
+- **Cull (mid r6, 2.0 M cells, India z3.2):** rendered exactly **120 k**, cells concentrate on dense
+  regions (quickselect top-k correct), viewport fully covered (no holes); cull key steps in **4.9°
+  quanta** (78.35→83.25→88.14) vs the old 1°.
+- **Prefetch (Shanghai z5.2):** fetch log shows **two bursts** — 13 visible tiles at t≈0, then 10
+  prefetch-ring tiles at t≈3.7 s once idle; a +6° pan into the warmed ring fetched **0 tiles** (no
+  empty flash). 0 console errors.
+- **Measurement caveat:** the synthetic `setViewState` ramp fires no pointer events, so it cannot
+  show the picking-skip win, and cross-time FPS on the dev box is load-noisy (a concurrent
+  `vite build` made a 1m45s build take ~5min and stalled the renderer — serialize build vs.
+  dev-server + WebGL tab; noted in agent memory). Wins asserted structurally + visually.
+
 ## Iteration loop
 
 Human / sprint cadence (this file is the PM log):
@@ -172,7 +201,9 @@ CDN gzip+range failure. `verify:live` + the live-UI smoke test now cover the dep
 
 - ↳ pulled into **Sprint 3**: geocode search + fly-to + share-state deep-link (+ default zoom-in, zoom controls).
 - ↳ pulled into **Sprint 4**: code-split deck.gl; OG/social meta + preview image; default zoom-out.
-- ↳ queued in **specs/TODO.md**: responsive mobile framing; r8 tile prefetch on pan; night-lights basemap toggle.
+- ↳ pulled into **Sprint 5**: interaction performance — DPR cap + instanced columns + drag-time
+  picking skip; cull cadence + quickselect; r8 idle tile prefetch on pan.
+- ↳ queued in **specs/TODO.md**: night-lights basemap toggle.
 - PWA offline; time-series animation (needs breakdown — see specs/TODO.md backlog).
 - (Bilingual RTL he/en UI — dropped per scope decision.)
 

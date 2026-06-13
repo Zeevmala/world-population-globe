@@ -82,10 +82,10 @@ src/
     load.ts             # manifest + LOD loaders → columnar typed arrays
     parquet.ts          # hyparquet column reader (subpath import)
     useGlobeData.ts     # eager overview + lazy mid by zoom band
-    useTileStreaming.ts # r8 viewport tile fetch + LRU cache + merge
+    useTileStreaming.ts # r8 viewport tile fetch + LRU cache + merge + idle ring prefetch
   lib/
-    lod.ts              # pickLod() + selectActive() + cullForView() viewport cull + cap
-    tiles.ts            # visibleParents() (h3-js gridDisk) + coarse view key
+    lod.ts              # pickLod() + selectActive() + cullForView() viewport cull + quickselect cap
+    tiles.ts            # visibleParents() + prefetchParents() (h3-js gridDisk) + coarse view key
     scales.ts           # log1p normalization, elevation/earth constants
     colorRamp.ts        # Inferno ramp (RGB + CSS)
     format.ts           # population / lat-lng formatting
@@ -106,6 +106,23 @@ src/
   - Data is **columnar typed arrays** + deck.gl non-iterable `{length}` accessors → no per-cell objects.
 - **Globe** — dark ocean sphere (`SimpleMeshLayer`, CARTESIAN) + Natural Earth 110 m land
   outline; ambient + directional lighting so columns read as 3D while keeping ramp colors true.
+- **Interaction performance** (panning was the user-felt cost — most of it was paid *per
+  pointer event* during a drag, invisible to a synthetic `setViewState` benchmark):
+  - **Picking off while dragging** — a `pickable` layer re-renders the picking buffer on every
+    `pointermove`; an `isDragging` store flag (set from `onInteractionStateChange`) drops
+    `pickable` during a drag, so a pan no longer double-draws the whole scene. Hover resumes on release.
+  - **Render-buffer cap** — `useDevicePixels ≤ 1.5`; on HiDPI the dark scene is fill-rate bound
+    while panning and the cap is visually lossless here.
+  - **Instanced columns** — `H3HexagonLayer` `highPrecision: false`: instanced extruded hexes
+    instead of per-cell polygon tessellation. Far fewer verts/frame; shape error is sub-pixel at
+    overview and negligible at the zooms where one region fills the view (QA'd overview + r8).
+  - **Re-cull cadence** — `cullKeyFor` quantizes the camera to a zoom-relative step (`halfSpan/4`)
+    so the dense-tier cull re-runs ~5–10× less often than the old fixed 1°; `cullForView` scans a
+    `1.5×halfSpan` window (wider than the quantum, so edges don't pop) and fills the 120 k cap via
+    an O(n) quickselect (`topKByPopulation`) instead of an O(n log n) sort of ~1 M indices.
+  - **Idle tile prefetch** — after the visible r8 tiles merge, a `requestIdleCallback` warms the
+    `gridDisk` k+1 ring into the LRU cache (no `setR8Data`, so no rebuild), with visible-protecting
+    eviction — so panning reveals ready tiles instead of empty gaps.
 
 ## 5. Deploy
 
