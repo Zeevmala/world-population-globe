@@ -41,6 +41,9 @@ interface GlobeStore {
   hover: HoverInfo | null
   viewState: GlobeViewState
   autoRotate: boolean
+  /** True while the user is actively dragging — disables hover picking so the
+   * costly picking-buffer re-render doesn't fire on every pointermove. */
+  isDragging: boolean
   /** Pending fly-to destination (animated by `Globe`); null when idle. */
   flyTarget: FlyTarget | null
 
@@ -51,6 +54,7 @@ interface GlobeStore {
   setError: (e: string) => void
   setHover: (h: HoverInfo | null) => void
   setViewState: (v: GlobeViewState) => void
+  setDragging: (on: boolean) => void
   rotateBy: (deg: number) => void
   zoomBy: (delta: number) => void
   flyTo: (lng: number, lat: number, zoom?: number) => void
@@ -69,6 +73,7 @@ export const useGlobeStore = create<GlobeStore>((set) => ({
   hover: null,
   viewState: INITIAL_VIEW,
   autoRotate: !HASH_VIEW,
+  isDragging: false,
   flyTarget: null,
 
   setManifest: (manifest) => set({ manifest }),
@@ -78,6 +83,9 @@ export const useGlobeStore = create<GlobeStore>((set) => ({
   setError: (error) => set({ error, status: 'error' }),
   setHover: (hover) => set({ hover }),
   setViewState: (viewState) => set({ viewState }),
+  // Idempotent guard: only write (and re-render) on an actual edge, so the
+  // per-frame interaction callback doesn't churn the store while dragging.
+  setDragging: (on) => set((s) => (s.isDragging === on ? s : { isDragging: on })),
   rotateBy: (deg) =>
     set((s) => ({
       viewState: { ...s.viewState, longitude: wrapLng(s.viewState.longitude + deg) },

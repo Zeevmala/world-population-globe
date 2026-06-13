@@ -28,6 +28,7 @@ function buildPopulationLayer(
   data: LodData,
   indices: Uint32Array | null,
   cullKey: string,
+  pickable: boolean,
   setHover: (h: HoverInfo | null) => void,
 ): Layer {
   const { h3, population, lng, lat, approxKm } = data
@@ -42,8 +43,15 @@ function buildPopulationLayer(
     id: 'population',
     data: { length: count },
     extruded: true,
-    pickable: true,
-    highPrecision: 'auto',
+    // Off while dragging: a pickable layer re-renders the picking buffer on every
+    // pointermove, doubling per-frame GPU work during a pan. Hover resumes on release.
+    pickable,
+    // 'auto' picks the high-precision path for global data (per-cell polygon
+    // tessellation, ~5M verts/frame → ~15 fps pans). Instanced columns render the
+    // same extruded hexes at a fraction of the GPU cost; shape error from the
+    // shared-hexagon approximation is sub-pixel at overview and negligible at the
+    // zooms where a single region fills the viewport. QA'd at limb/antimeridian/r8.
+    highPrecision: false,
     elevationScale: 1,
     material: { ambient: 0.7, diffuse: 0.5, shininess: 20, specularColor: [40, 40, 40] },
     getHexagon: (_: unknown, info: AccessorInfo) => h3[srcOf(info.index)],
@@ -75,6 +83,7 @@ export function useGlobeLayers(): Layer[] {
   const r8Data = useGlobeStore((s) => s.r8Data)
   const manifest = useGlobeStore((s) => s.manifest)
   const viewState = useGlobeStore((s) => s.viewState)
+  const isDragging = useGlobeStore((s) => s.isDragging)
   const setHover = useGlobeStore((s) => s.setHover)
 
   const { data: lodData } = selectActive(viewState, manifest, data, r8Data)
@@ -108,8 +117,8 @@ export function useGlobeLayers(): Layer[] {
       }),
     ]
     if (lodData) {
-      layers.push(buildPopulationLayer(lodData, cull.indices, cull.key, setHover))
+      layers.push(buildPopulationLayer(lodData, cull.indices, cull.key, !isDragging, setHover))
     }
     return layers
-  }, [lodData, cull, setHover])
+  }, [lodData, cull, isDragging, setHover])
 }

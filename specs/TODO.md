@@ -33,6 +33,25 @@ REPORT  : conventional commits + `[x]` flips here; sprint-level summary → PROJ
       preview oracles 1280×800 → 1.3, 375×812 → 1.9, hash `#139.7/35.68/5` wins on portrait;
       0 console errors. Preview screenshot capture timed out on the WebGL canvas — visual
       check by zoom-ratio proxy (2^0.6 ≈ 1.52× diameter ≈ full 375 px width).)*
+- [x] Pan perf — baseline frame cost: globe pans slowly (user report, even at overview).
+      Cap the render buffer (`useDevicePixels` ≤ 1.5), render columns instanced
+      (`highPrecision: false`), and disable hover picking while dragging so the picking
+      buffer doesn't re-render on every `pointermove`
+      (`components/Globe.tsx`, `layers/useGlobeLayers.ts`, `store/useGlobeStore.ts`).
+      Accept: visuals unchanged at overview/r8 (Inferno ramp + column shapes); `pickable`
+      flips off while dragging, on at rest; `npm run verify` green; 0 console errors.
+      *(Done 2026-06-13: `MAX_PIXEL_RATIO` 1.5 cap + `isDragging` store flag gating
+      `pickable`; H3 layer `highPrecision: false`. Verified live via `window.__globe`/`__deck`
+      oracles — effPx 1.5, instanced sublayer active, pickable true→false→true across
+      idle/drag/release, r8 Tokyo + overview render artifact-free. Synthetic `setViewState`
+      ramps can't measure the picking win (they fire no pointer events) and cross-time FPS on
+      this box is load-noisy, so the picking-skip is asserted structurally, not by a frame delta.)*
+- [ ] Pan perf — cull cadence: dense-tier viewport cull (`lib/lod.ts`) re-runs every ~1° of
+      drag (`cullKeyFor` quantizes center to 1°) and full-sorts up to ~1M indices. Quantize the
+      re-cull cadence to a zoom-relative step (~`halfSpan/4`), scan a `1.5×halfSpan` margin so
+      edges don't pop, and replace the full sort with quickselect for the 120k-cell top-k.
+      Accept: ~10× fewer rebuilds while dragging at mid/r8; same cells rendered (cap + highest-pop
+      semantics preserved); `npm run verify` green.
 - [ ] Tile prefetch on pan: `src/data/useTileStreaming.ts` fetches visible r3 parents only;
       prefetch the gridDisk ring k+1 when the viewport is idle so panning at r8 doesn't flash
       empty tiles. Accept: pan at zoom ≥ 4.5 in preview shows no empty-tile flash; LRU cap
