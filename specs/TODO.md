@@ -46,12 +46,18 @@ REPORT  : conventional commits + `[x]` flips here; sprint-level summary → PROJ
       idle/drag/release, r8 Tokyo + overview render artifact-free. Synthetic `setViewState`
       ramps can't measure the picking win (they fire no pointer events) and cross-time FPS on
       this box is load-noisy, so the picking-skip is asserted structurally, not by a frame delta.)*
-- [ ] Pan perf — cull cadence: dense-tier viewport cull (`lib/lod.ts`) re-runs every ~1° of
+- [x] Pan perf — cull cadence: dense-tier viewport cull (`lib/lod.ts`) re-runs every ~1° of
       drag (`cullKeyFor` quantizes center to 1°) and full-sorts up to ~1M indices. Quantize the
       re-cull cadence to a zoom-relative step (~`halfSpan/4`), scan a `1.5×halfSpan` margin so
       edges don't pop, and replace the full sort with quickselect for the 120k-cell top-k.
       Accept: ~10× fewer rebuilds while dragging at mid/r8; same cells rendered (cap + highest-pop
       semantics preserved); `npm run verify` green.
+      *(Done 2026-06-13: `cullKeyFor` quantizes center to `max(0.25, halfSpan/4)` + zoom to 0.25;
+      `cullForView` scans `1.5×halfSpan` and uses in-place `topKByPopulation` quickselect.
+      Verified live at mid (r6, 2.0M cells) over India z3.2: rendered exactly 120k, cells
+      concentrate on dense regions (quickselect top-k correct), viewport fully covered, no holes;
+      cull key steps in 4.9° quanta (78.35→83.25→88.14) vs the old 1° — ~5× fewer re-culls at z3.2,
+      ~10× near z2.2. `npm run verify` exit 0.)*
 - [ ] Tile prefetch on pan: `src/data/useTileStreaming.ts` fetches visible r3 parents only;
       prefetch the gridDisk ring k+1 when the viewport is idle so panning at r8 doesn't flash
       empty tiles. Accept: pan at zoom ≥ 4.5 in preview shows no empty-tile flash; LRU cap

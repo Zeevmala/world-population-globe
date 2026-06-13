@@ -46,6 +46,42 @@ function lngDelta(a: number, b: number): number {
   return Math.min(d, 360 - d)
 }
 
+/** Approximate angular half-extent (degrees) of the viewport at a globe zoom. */
+function halfSpanDeg(zoom: number): number {
+  return Math.min(60, 180 / Math.pow(2, zoom))
+}
+
+/**
+ * In-place iterative quickselect: rearrange `idx` so its first `k` entries are the
+ * `k` highest-population cells (unordered within the k). O(n) average vs the
+ * O(n log n) full sort it replaces — render order is irrelevant, only the set.
+ */
+function topKByPopulation(idx: number[], population: ArrayLike<number>, k: number): Uint32Array {
+  let lo = 0
+  let hi = idx.length - 1
+  while (lo < hi) {
+    const pivot = population[idx[(lo + hi) >> 1]]
+    let i = lo
+    let j = hi
+    while (i <= j) {
+      while (population[idx[i]] > pivot) i++ // larger pops belong on the left
+      while (population[idx[j]] < pivot) j-- // smaller pops belong on the right
+      if (i <= j) {
+        const t = idx[i]
+        idx[i] = idx[j]
+        idx[j] = t
+        i++
+        j--
+      }
+    }
+    // Narrow to the partition holding the k-largest boundary; stop once it splits there.
+    if (k <= j) hi = j
+    else if (k >= i) lo = i
+    else break
+  }
+  return Uint32Array.from(idx.slice(0, k))
+}
+
 export interface CullResult {
   /** Source indices to render, or `null` to render the whole tier. */
   indices: Uint32Array | null
@@ -55,13 +91,21 @@ export interface CullResult {
 
 /**
  * Cheap memo key for {@link cullForView}: stable while the active tier and the
- * coarsely-rounded camera are unchanged, so the heavy cull only re-runs when the
- * view has moved a meaningful amount (not on every drag tick).
+ * coarsely-quantized camera are unchanged, so the heavy cull only re-runs when the
+ * view has moved a meaningful fraction of the viewport — not on every drag tick.
+ * The quantum scales with zoom (≈ halfSpan/4): zoomed out, a 1° nudge is nothing
+ * and shouldn't re-cull; zoomed in, the same nudge is a big move and should. The
+ * cull window ({@link cullForView}) carries a wider margin than this quantum, so
+ * cells never pop at the edges in the gap between re-culls.
  */
 export function cullKeyFor(data: LodData | undefined, view: GlobeViewState): string {
   if (!data) return 'none'
   if (data.h3.length <= MAX_RENDERED_CELLS) return `${data.lod}:all`
-  return `${data.lod}:${Math.round(view.longitude)}:${Math.round(view.latitude)}:${view.zoom.toFixed(1)}`
+  const q = Math.max(0.25, halfSpanDeg(view.zoom) / 4)
+  const lng = Math.round(view.longitude / q) * q
+  const lat = Math.round(view.latitude / q) * q
+  const z = Math.round(view.zoom / 0.25) * 0.25
+  return `${data.lod}:${lng.toFixed(2)}:${lat.toFixed(2)}:${z.toFixed(2)}`
 }
 
 /**
@@ -76,22 +120,25 @@ export function cullForView(data: LodData | undefined, view: GlobeViewState): Cu
     return { indices: null, key: `${data.lod}:all` }
   }
 
-  const halfSpan = Math.min(60, 180 / Math.pow(2, view.zoom))
+  // Scan a window 1.5× the visible half-span: wider than the re-cull quantum
+  // (halfSpan/4), so the rendered set still covers the viewport after the camera
+  // drifts up to one quantum between re-culls — no empty edges mid-drag.
+  const win = Math.min(90, 1.5 * halfSpanDeg(view.zoom))
   const { lng, lat, population } = data
   const cLng = view.longitude
   const cLat = view.latitude
 
   const visible: number[] = []
   for (let i = 0; i < lng.length; i++) {
-    if (Math.abs(lat[i] - cLat) <= halfSpan && lngDelta(lng[i], cLng) <= halfSpan) {
+    if (Math.abs(lat[i] - cLat) <= win && lngDelta(lng[i], cLng) <= win) {
       visible.push(i)
     }
   }
-  if (visible.length > MAX_RENDERED_CELLS) {
-    visible.sort((a, b) => population[b] - population[a])
-    visible.length = MAX_RENDERED_CELLS
-  }
 
-  const key = `${data.lod}:${Math.round(cLng)}:${Math.round(cLat)}:${view.zoom.toFixed(1)}`
-  return { indices: Uint32Array.from(visible), key }
+  const indices =
+    visible.length > MAX_RENDERED_CELLS
+      ? topKByPopulation(visible, population, MAX_RENDERED_CELLS)
+      : Uint32Array.from(visible)
+
+  return { indices, key: cullKeyFor(data, view) }
 }
