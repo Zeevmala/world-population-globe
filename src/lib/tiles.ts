@@ -17,6 +17,11 @@ function parentEdgeDeg(res: number): number {
   return byRes[res] ?? 9
 }
 
+/** `gridDisk` radius (rings) needed to cover the viewport, clamped to [1, 6]. */
+function diskRadius(view: GlobeViewState, parentRes: number): number {
+  return Math.min(6, Math.max(1, Math.ceil(halfSpanDeg(view.zoom) / parentEdgeDeg(parentRes))))
+}
+
 /**
  * Which parent tiles intersect the current view: the parent cell under the
  * camera center plus a `gridDisk` ring sized so the disk covers the viewport.
@@ -24,6 +29,17 @@ function parentEdgeDeg(res: number): number {
  */
 export function visibleParents(view: GlobeViewState, parentRes: number): string[] {
   const center = latLngToCell(view.latitude, view.longitude, parentRes)
-  const k = Math.min(6, Math.max(1, Math.ceil(halfSpanDeg(view.zoom) / parentEdgeDeg(parentRes))))
-  return gridDisk(center, k)
+  return gridDisk(center, diskRadius(view, parentRes))
+}
+
+/**
+ * The next ring out from {@link visibleParents} (the gridDisk k+1 shell, minus the
+ * visible k-disk). Warmed on idle so a pan reveals already-cached tiles instead of
+ * flashing empty — these are exactly the parents about to scroll into view.
+ */
+export function prefetchParents(view: GlobeViewState, parentRes: number): string[] {
+  const center = latLngToCell(view.latitude, view.longitude, parentRes)
+  const k = diskRadius(view, parentRes)
+  const inner = new Set(gridDisk(center, k))
+  return gridDisk(center, k + 1).filter((p) => !inner.has(p))
 }

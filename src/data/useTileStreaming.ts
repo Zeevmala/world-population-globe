@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { BASE } from './load'
 import { readColumns } from './parquet'
-import { visibleParents, viewKey } from '../lib/tiles'
+import { prefetchParents, visibleParents, viewKey } from '../lib/tiles'
 import { useGlobeStore } from '../store/useGlobeStore'
 import type { LodData, TileIndex } from '../types'
 
@@ -16,6 +16,74 @@ const TILE_CACHE_MAX = 64
 
 function toF32(col: ArrayLike<unknown>): Float32Array {
   return col instanceof Float32Array ? col : Float32Array.from(col as ArrayLike<number>)
+}
+
+/** Run `cb` when the main thread is idle; falls back to a short timer. */
+function onIdle(cb: () => void): number {
+  const ric = (globalThis as { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number })
+    .requestIdleCallback
+  return ric ? ric(cb, { timeout: 1500 }) : (setTimeout(cb, 250) as unknown as number)
+}
+function cancelIdle(id: number): void {
+  const cic = (globalThis as { cancelIdleCallback?: (id: number) => void }).cancelIdleCallback
+  if (cic) cic(id)
+  else clearTimeout(id)
+}
+
+/** Evict least-recently-used tiles past the cap, never one in `protect` (visible). */
+function evictLru(cache: Map<string, TileCols>, protect: Set<string>): void {
+  while (cache.size > TILE_CACHE_MAX) {
+    let victim: string | undefined
+    for (const key of cache.keys()) {
+      if (!protect.has(key)) {
+        victim = key
+        break
+      }
+    }
+    if (victim === undefined) break // everything left is currently visible
+    cache.delete(victim)
+  }
+}
+
+/**
+ * Ensure parent `p` is resident in `cache`: bump LRU recency on a hit, else fetch
+ * (deduped via `inflight`) and insert, evicting LRU tiles that aren't in `protect`.
+ * Shared by the visible-tile load and the idle prefetch.
+ */
+async function ensureTile(
+  p: string,
+  idx: TileIndex,
+  cache: Map<string, TileCols>,
+  inflight: Map<string, Promise<TileCols>>,
+  protect: Set<string>,
+): Promise<void> {
+  const hit = cache.get(p)
+  if (hit) {
+    cache.delete(p)
+    cache.set(p, hit)
+    return
+  }
+  let job = inflight.get(p)
+  if (!job) {
+    const file = idx.tiles.find((t) => t.parent === p)!.file
+    job = (async () => {
+      const cols = await readColumns(`${BASE}${file}`, ['h3', 'population', 'lng', 'lat'])
+      return {
+        h3: Array.from(cols.h3 as ArrayLike<string>),
+        population: toF32(cols.population),
+        lng: toF32(cols.lng),
+        lat: toF32(cols.lat),
+      }
+    })()
+    inflight.set(p, job)
+  }
+  try {
+    const cols = await job
+    cache.set(p, cols)
+    evictLru(cache, protect)
+  } finally {
+    inflight.delete(p)
+  }
 }
 
 function mergeTiles(parents: string[], cache: Map<string, TileCols>, idx: TileIndex): LodData {
@@ -69,6 +137,7 @@ export function useTileStreaming(): void {
     processedRef.current = coarse
 
     let cancelled = false
+    let idleId: number | null = null
     const cache = cacheRef.current
     const inflight = inflightRef.current
 
@@ -87,50 +156,27 @@ export function useTileStreaming(): void {
 
       const exist = new Set(idx.tiles.map((t) => t.parent))
       const wanted = visibleParents(view, idx.parentRes).filter((p) => exist.has(p))
+      const protect = new Set(wanted)
 
-      await Promise.all(
-        wanted.map(async (p) => {
-          const hit = cache.get(p)
-          if (hit) {
-            cache.delete(p) // bump LRU recency
-            cache.set(p, hit)
-            return
-          }
-          let job = inflight.get(p)
-          if (!job) {
-            const file = idx.tiles.find((t) => t.parent === p)!.file
-            job = (async () => {
-              const cols = await readColumns(`${BASE}${file}`, ['h3', 'population', 'lng', 'lat'])
-              return {
-                h3: Array.from(cols.h3 as ArrayLike<string>),
-                population: toF32(cols.population),
-                lng: toF32(cols.lng),
-                lat: toF32(cols.lat),
-              }
-            })()
-            inflight.set(p, job)
-          }
-          try {
-            const cols = await job
-            cache.set(p, cols)
-            while (cache.size > TILE_CACHE_MAX) {
-              const oldest = cache.keys().next().value
-              if (oldest === undefined) break
-              cache.delete(oldest)
-            }
-          } finally {
-            inflight.delete(p)
-          }
-        }),
-      )
+      await Promise.all(wanted.map((p) => ensureTile(p, idx, cache, inflight, protect)))
       if (cancelled) return
 
       const loaded = wanted.filter((p) => cache.has(p))
       setR8Data(loaded.length ? mergeTiles(loaded, cache, idx) : null)
+
+      // Idle prefetch of the next ring out: warm the cache (no setR8Data, so no
+      // merge/rebuild) so panning reveals ready tiles instead of empty ones. The
+      // visible set is protected from eviction, so prefetch can't drop live tiles.
+      idleId = onIdle(() => {
+        if (cancelled) return
+        const ring = prefetchParents(view, idx.parentRes).filter((p) => exist.has(p))
+        void Promise.all(ring.map((p) => ensureTile(p, idx, cache, inflight, protect)))
+      })
     })()
 
     return () => {
       cancelled = true
+      if (idleId !== null) cancelIdle(idleId)
     }
   }, [r8, view, setR8Data])
 }

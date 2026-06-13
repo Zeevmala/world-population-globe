@@ -58,10 +58,16 @@ REPORT  : conventional commits + `[x]` flips here; sprint-level summary → PROJ
       concentrate on dense regions (quickselect top-k correct), viewport fully covered, no holes;
       cull key steps in 4.9° quanta (78.35→83.25→88.14) vs the old 1° — ~5× fewer re-culls at z3.2,
       ~10× near z2.2. `npm run verify` exit 0.)*
-- [ ] Tile prefetch on pan: `src/data/useTileStreaming.ts` fetches visible r3 parents only;
+- [x] Tile prefetch on pan: `src/data/useTileStreaming.ts` fetches visible r3 parents only;
       prefetch the gridDisk ring k+1 when the viewport is idle so panning at r8 doesn't flash
       empty tiles. Accept: pan at zoom ≥ 4.5 in preview shows no empty-tile flash; LRU cap
       (64) and in-flight dedupe respected; `npm run verify` green.
+      *(Done 2026-06-13: `prefetchParents()` (gridDisk k+1 shell) in `tiles.ts`; shared
+      `ensureTile()` + visible-protecting `evictLru()` in `useTileStreaming.ts`; idle ring
+      prefetch via `requestIdleCallback` that warms the cache without `setR8Data`. Verified
+      live at Shanghai z5.2: fetch log shows two bursts — 13 visible tiles at t≈0, then 10
+      prefetch-ring tiles at t≈3.7s (idle) — and a +6° pan into the warmed ring fetched 0
+      tiles (no flash). 0 console errors; `npm run verify` exit 0.)*
 - [ ] Night-lights basemap toggle: swap the dark-ocean sphere texture for NASA Black Marble
       (public domain) behind a `Controls.tsx` toggle; columns must stay legible
       (data > basemap). Accept: toggle works both ways at overview and r8 zoom; attribution
