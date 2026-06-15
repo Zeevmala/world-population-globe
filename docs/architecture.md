@@ -113,9 +113,11 @@ src/
     `pickable` during a drag, so a pan no longer double-draws the whole scene. Hover resumes on release.
   - **Render-buffer cap** — `useDevicePixels ≤ 1.5`; on HiDPI the dark scene is fill-rate bound
     while panning and the cap is visually lossless here.
-  - **Instanced columns** — `H3HexagonLayer` `highPrecision: false`: instanced extruded hexes
-    instead of per-cell polygon tessellation. Far fewer verts/frame; shape error is sub-pixel at
-    overview and negligible at the zooms where one region fills the view (QA'd overview + r8).
+  - **Instancing — tried and reverted.** `highPrecision: false` (instanced `ColumnLayer`) was
+    cheaper in verts but gave every hexagon prism the same face orientation; under the fixed
+    directional sun on the `_GlobeView` that produced an N-fold radial "star" of shading across the
+    sphere. It was also perf-neutral at overview, so `H3HexagonLayer` stays on `highPrecision: 'auto'`
+    (per-cell geometry, varied faces, no star). The pan wins above (picking-skip, DPR cap) carry it.
   - **Re-cull cadence** — `cullKeyFor` quantizes the camera to a zoom-relative step (`halfSpan/4`)
     so the dense-tier cull re-runs ~5–10× less often than the old fixed 1°; `cullForView` scans a
     `1.5×halfSpan` window (wider than the quantum, so edges don't pop) and fills the 120 k cap via

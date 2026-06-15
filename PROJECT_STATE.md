@@ -152,6 +152,15 @@ delta. Three commits (one per loop item).
   `vite build` made a 1m45s build take ~5min and stalled the renderer — serialize build vs.
   dev-server + WebGL tab; noted in agent memory). Wins asserted structurally + visually.
 
+### Post-deploy fix — instancing reverted (star-shadow regression)
+The `highPrecision: false` lever (Fix 1) was caught in production causing a radial **star-shaped
+shadow** on the auto-rotating overview globe: the instanced `ColumnLayer` gives every hexagon prism
+the same face orientation, so the fixed directional sun lit them in an N-fold pattern across the
+sphere. Reverted to `highPrecision: 'auto'` (the pre-Sprint-5 per-cell path — visually proven, and
+instancing was perf-neutral at overview anyway). DPR cap + drag picking-skip retained as the real
+pan wins. Lesson: the QA gap was checking close-up r8 + a static overview, not the *lit, rotating*
+full globe where the symmetry shows.
+
 ## Iteration loop
 
 Human / sprint cadence (this file is the PM log):

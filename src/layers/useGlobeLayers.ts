@@ -46,12 +46,13 @@ function buildPopulationLayer(
     // Off while dragging: a pickable layer re-renders the picking buffer on every
     // pointermove, doubling per-frame GPU work during a pan. Hover resumes on release.
     pickable,
-    // 'auto' picks the high-precision path for global data (per-cell polygon
-    // tessellation, ~5M verts/frame → ~15 fps pans). Instanced columns render the
-    // same extruded hexes at a fraction of the GPU cost; shape error from the
-    // shared-hexagon approximation is sub-pixel at overview and negligible at the
-    // zooms where a single region fills the viewport. QA'd at limb/antimeridian/r8.
-    highPrecision: false,
+    // Keep the per-cell hi-fi path. The instanced ColumnLayer (`highPrecision: false`)
+    // gives every hexagon prism the same face orientation; lit by the fixed directional
+    // sun on the GlobeView, those uniform faces produced an N-fold radial "star" of
+    // shading across the sphere. 'auto' uses each cell's true geometry, so face
+    // orientations vary and no star forms. (Instancing was perf-neutral at overview
+    // anyway — the pan wins are the devicePixels cap + drag-time picking skip.)
+    highPrecision: 'auto',
     elevationScale: 1,
     material: { ambient: 0.7, diffuse: 0.5, shininess: 20, specularColor: [40, 40, 40] },
     getHexagon: (_: unknown, info: AccessorInfo) => h3[srcOf(info.index)],
