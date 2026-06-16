@@ -10,7 +10,7 @@ export function Legend() {
         className="h-2.5 w-44 rounded"
         style={{ background: `linear-gradient(90deg, ${infernoCssStops()})` }}
       />
-      <div className="mt-1 flex justify-between text-[10px] text-white/50">
+      <div className="mt-1 flex justify-between text-[10px] text-white/60">
         <span>Low</span>
         <span>High (log scale)</span>
       </div>

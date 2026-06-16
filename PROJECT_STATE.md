@@ -1,7 +1,7 @@
 # PROJECT_STATE — `world-population-globe`
 
 > PM tracker. Source of truth for sprint status and iteration loop.
-> Last updated: 2026-06-10.
+> Last updated: 2026-06-17.
 
 ## Product
 
@@ -161,6 +161,38 @@ instancing was perf-neutral at overview anyway). DPR cap + drag picking-skip ret
 pan wins. Lesson: the QA gap was checking close-up r8 + a static overview, not the *lit, rotating*
 full globe where the symmetry shows.
 
+## Status: Sprint 6 — cartographic presentation (seat the globe in space) ✅ SHIPPED
+
+Theme: a user-requested "make it world-class" pass. The data, encoding, and engineering
+were already strong; the gap was *presentation* — the planet read as a flat disc in
+featureless black (a static screen-space corner-vignette faked the atmosphere) — plus a
+few finish holes. Deliberately **out of scope** (locked with the user): the Inferno ramp,
+column `material`, `LightingEffect`, and the LOD/cull/120 k pipeline are untouched — colors
+stay full-bright. Atmosphere + stars are screen-space **DOM**, so there is no WebGL-pipeline
+change and no star-shadow-class regression risk (see Sprint 5 postmortem).
+
+| # | Task | Notes / files |
+|---|---|---|
+| 1 | ✅ Atmospheric limb glow | new `components/Atmosphere.tsx` replaces the static corner-vignette in `App.tsx`. A `pointer-events-none` CSS radial-gradient anchored at the viewport center (where GlobeView keeps the disc); radius = `viewportHeight × radiusFrac(zoom)`, a zoom→fraction profile **sampled from the live deck projection** (perspective FOV → radius scales with height, non-linear in zoom). Hugs the limb within 1–3 px and collapses off-screen at city zoom (CSS clamps the non-increasing stops). Zero GPU cost. |
+| 2 | ✅ Starfield | new `components/Starfield.tsx`; 420 seeded (mulberry32, deterministic) static stars in one SVG behind the **transparent** globe canvas (the opaque sphere occludes those behind it). A bright subset (~18) twinkles via CSS, gated behind `prefers-reduced-motion: no-preference`. No network asset. |
+| 3 | ✅ Adaptive DPR sharpening | `Globe.tsx`: `useDevicePixels` is now reactive — `1.5×` while in motion (drag / spin / fly, preserving the Sprint-5 pan budget), up to `2×` at rest with a 200 ms settle debounce on the way up (avoids buffer-realloc thrash). Crisper resting image on HiDPI. |
+| 4 | ✅ Accessibility | new `lib/useReducedMotion.ts`; `prefers-reduced-motion` → no auto-spin on load (store init) + instant fly-to instead of the 1.6 s tween + no twinkle. Global `:focus-visible` ring in `index.css` (canvas kept clear). Dimmest text bumped `white/40 → /60` (Attribution / InfoPanel H3 / Legend labels) → WCAG AA on `#05070d`. |
+
+### Verification log (Sprint 6)
+- `npm run verify` exit 0 (eslint + `tsc -b` + `vite build`). Entry chunk **65 KB gzip** —
+  the new components are tiny and, by design, did **not** pull deck.gl into the entry bundle
+  (Globe chunk stays lazy).
+- **Live oracles** (`window.__globe` / `__deck`, preview): the atmosphere gradient's
+  transparent-core stop matches the **true apparent disc radius within 1–3 px** across zoom
+  0–2.5 (e.g. z1.3 → 150 px computed vs 149 px measured), validated by projecting points along
+  a meridian and by sampling offscreen `GlobeViewport`s at many zooms without disturbing the
+  live view. 420 stars present, 18 twinkling; `:focus-visible` rule + contrast classes applied;
+  **0 console errors**.
+- **Couldn't observe (correct-by-construction + type-checked):** the 2× DPR upgrade — the dev
+  box is a 1.5-DPR display, so `min(dpr, 2) === min(dpr, 1.5)`, a no-op here — and the
+  reduced-motion branches (an OS setting). `preview_screenshot` still hangs on the WebGL canvas,
+  so all visual asserts went through eval oracles, not pixels.
+
 ## Iteration loop
 
 Human / sprint cadence (this file is the PM log):
@@ -212,6 +244,9 @@ CDN gzip+range failure. `verify:live` + the live-UI smoke test now cover the dep
 - ↳ pulled into **Sprint 4**: code-split deck.gl; OG/social meta + preview image; default zoom-out.
 - ↳ pulled into **Sprint 5**: interaction performance — DPR cap + instanced columns + drag-time
   picking skip; cull cadence + quickselect; r8 idle tile prefetch on pan.
+- ↳ **Sprint 6** (user-requested): cartographic presentation — atmospheric limb glow + starfield
+  + adaptive DPR sharpening + accessibility (reduced-motion, focus-visible, contrast). Encoding
+  and lighting untouched.
 - ↳ queued in **specs/TODO.md**: night-lights basemap toggle.
 - PWA offline; time-series animation (needs breakdown — see specs/TODO.md backlog).
 - (Bilingual RTL he/en UI — dropped per scope decision.)

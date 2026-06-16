@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { GlobeViewState, HoverInfo, LodData, Manifest } from '../types'
 import { parseHash } from '../lib/urlState'
+import { prefersReducedMotion } from '../lib/useReducedMotion'
 
 // A `#lng/lat/zoom` deep-link (if present) seeds the camera and disables the
 // idle auto-spin so the shared view stays put.
@@ -72,7 +73,9 @@ export const useGlobeStore = create<GlobeStore>((set) => ({
   error: null,
   hover: null,
   viewState: INITIAL_VIEW,
-  autoRotate: !HASH_VIEW,
+  // Idle auto-spin on load, unless a deep-link pins the view or the user has asked
+  // for reduced motion.
+  autoRotate: !HASH_VIEW && !prefersReducedMotion(),
   isDragging: false,
   flyTarget: null,
 

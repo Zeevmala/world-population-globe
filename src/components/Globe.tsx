@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import DeckGL from '@deck.gl/react'
 import type { DeckGLRef } from '@deck.gl/react'
 import {
@@ -12,6 +12,7 @@ import { useGlobeStore } from '../store/useGlobeStore'
 import { useGlobeLayers } from '../layers/useGlobeLayers'
 import { useGlobeData } from '../data/useGlobeData'
 import { useTileStreaming } from '../data/useTileStreaming'
+import { useReducedMotion } from '../lib/useReducedMotion'
 import { formatHash } from '../lib/urlState'
 
 const GLOBE_VIEW = new GlobeView({ id: 'globe' })
@@ -25,10 +26,13 @@ const LIGHTING = new LightingEffect({
 
 const CONTROLLER = { inertia: 300, scrollZoom: { smooth: true } as const }
 
-// Cap the render buffer at 1.5× CSS pixels. On HiDPI displays the globe is
-// fill-rate bound while panning; a dark scene with log1p-scaled columns shows no
-// visible quality loss from the cap, but the pixel-count cut buys frame budget.
-const MAX_PIXEL_RATIO = 1.5
+// Adaptive device-pixel ratio. While the globe is in motion (drag / spin / fly) it's
+// fill-rate bound, so cap the buffer at 1.5× CSS px to protect the frame budget. Once
+// motion settles, render at up to 2× for a crisp resting image. The debounce on the
+// way *up* avoids reallocating the drawing buffer during rapid input.
+const MOTION_PIXEL_RATIO = 1.5
+const STILL_PIXEL_RATIO = 2
+const SETTLE_MS = 200
 
 export function Globe() {
   useGlobeData()
@@ -39,8 +43,12 @@ export function Globe() {
   const autoRotate = useGlobeStore((s) => s.autoRotate)
   const setAutoRotate = useGlobeStore((s) => s.setAutoRotate)
   const setDragging = useGlobeStore((s) => s.setDragging)
+  const isDragging = useGlobeStore((s) => s.isDragging)
   const rotateBy = useGlobeStore((s) => s.rotateBy)
   const flyTarget = useGlobeStore((s) => s.flyTarget)
+  const reducedMotion = useReducedMotion()
+  const [flying, setFlying] = useState(false)
+  const [sharp, setSharp] = useState(false)
 
   useEffect(() => {
     if (!autoRotate) return
@@ -57,37 +65,67 @@ export function Globe() {
 
   // Animated fly-to: ease the camera from the current view to `flyTarget` over ~1.6 s.
   // A manual rAF tween (like auto-rotate above) is used instead of deck's
-  // FlyToInterpolator, which assumes Web Mercator and misbehaves on GlobeView.
+  // FlyToInterpolator, which assumes Web Mercator and misbehaves on GlobeView. Under
+  // reduced-motion we jump straight to the target instead of tweening.
   useEffect(() => {
     if (!flyTarget) return
+    const wrapLng = (lng: number) => ((((lng + 180) % 360) + 360) % 360) - 180
     const start = useGlobeStore.getState().viewState
     const startLng = start.longitude
-    const startLat = start.latitude
-    const startZoom = start.zoom
     let dLng = flyTarget.longitude - startLng
     dLng -= 360 * Math.round(dLng / 360) // shortest way around the globe
+
+    if (reducedMotion) {
+      setViewState({
+        ...useGlobeStore.getState().viewState,
+        longitude: wrapLng(flyTarget.longitude),
+        latitude: flyTarget.latitude,
+        zoom: flyTarget.zoom,
+      })
+      return
+    }
+
+    const startLat = start.latitude
+    const startZoom = start.zoom
     const dLat = flyTarget.latitude - startLat
     const dZoom = flyTarget.zoom - startZoom
     const DURATION = 1600
     const ease = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2)
 
     let raf = 0
+    let started = false
     const t0 = performance.now()
     const tick = (now: number) => {
+      if (!started) {
+        started = true
+        setFlying(true) // in the rAF callback, not the effect body (cascading-render lint)
+      }
       const t = Math.min(1, (now - t0) / DURATION)
       const e = ease(t)
-      const lng = startLng + dLng * e
       setViewState({
         ...useGlobeStore.getState().viewState,
-        longitude: ((((lng + 180) % 360) + 360) % 360) - 180,
+        longitude: wrapLng(startLng + dLng * e),
         latitude: startLat + dLat * e,
         zoom: startZoom + dZoom * e,
       })
       if (t < 1) raf = requestAnimationFrame(tick)
+      else setFlying(false)
     }
     raf = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(raf)
-  }, [flyTarget, setViewState])
+    return () => {
+      cancelAnimationFrame(raf)
+      setFlying(false)
+    }
+  }, [flyTarget, setViewState, reducedMotion])
+
+  // Render crisp at rest, soft while moving. Drop to the motion cap ~immediately when a
+  // drag / spin / flight starts; raise to the still cap only after motion settles. Both
+  // writes go through a timer (not the effect body) to avoid cascading-render churn.
+  useEffect(() => {
+    const inMotion = isDragging || autoRotate || flying
+    const t = setTimeout(() => setSharp(!inMotion), inMotion ? 0 : SETTLE_MS)
+    return () => clearTimeout(t)
+  }, [isDragging, autoRotate, flying])
 
   // Sync the camera to the URL hash (debounced) so a reload restores the view and
   // "Share" yields a deep-link. Skipped while idly auto-spinning (no URL churn);
@@ -112,7 +150,10 @@ export function Globe() {
       views={GLOBE_VIEW}
       viewState={viewState}
       controller={CONTROLLER}
-      useDevicePixels={Math.min(window.devicePixelRatio || 1, MAX_PIXEL_RATIO)}
+      useDevicePixels={Math.min(
+        window.devicePixelRatio || 1,
+        sharp ? STILL_PIXEL_RATIO : MOTION_PIXEL_RATIO,
+      )}
       onViewStateChange={(e) => setViewState(e.viewState as unknown as GlobeViewState)}
       onInteractionStateChange={(s: { isDragging?: boolean }) => {
         const dragging = !!s.isDragging

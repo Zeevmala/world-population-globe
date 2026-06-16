@@ -5,6 +5,8 @@ import { Controls } from './components/Controls'
 import { Legend } from './components/Legend'
 import { InfoPanel } from './components/InfoPanel'
 import { Attribution } from './components/Attribution'
+import { Atmosphere } from './components/Atmosphere'
+import { Starfield } from './components/Starfield'
 import { Loader } from './components/Loader'
 import { useGlobeStore } from './store/useGlobeStore'
 
@@ -19,18 +21,16 @@ export default function App() {
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-[#05070d]">
+      {/* Stars sit behind the (transparent) globe canvas, so they show in the space
+          around the planet; the opaque sphere occludes those behind it. */}
+      <Starfield />
+
       <Suspense fallback={<Loader message="Loading globe…" />}>
         <Globe />
       </Suspense>
 
-      {/* Vignette to seat the globe in space; passes pointer events to canvas. */}
-      <div
-        className="pointer-events-none absolute inset-0 z-10"
-        style={{
-          background:
-            'radial-gradient(circle at 50% 45%, transparent 55%, rgba(0,0,0,0.55) 100%)',
-        }}
-      />
+      {/* Atmospheric limb glow + deep-space framing; passes pointer events to canvas. */}
+      <Atmosphere />
 
       <div className="pointer-events-none absolute inset-0 z-20">
         <div className="pointer-events-auto absolute left-4 top-4">

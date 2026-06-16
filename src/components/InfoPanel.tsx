@@ -17,7 +17,7 @@ export function InfoPanel() {
       <div className="mt-1 text-xs text-white/60">
         {formatLat(hover.lat)}, {formatLng(hover.lng)}
       </div>
-      <div className="mt-1 font-mono text-[10px] text-white/40">{hover.h3}</div>
+      <div className="mt-1 font-mono text-[10px] text-white/60">{hover.h3}</div>
     </div>
   )
 }

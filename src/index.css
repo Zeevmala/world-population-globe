@@ -18,3 +18,29 @@ body {
 canvas {
   outline: none;
 }
+
+/* Visible keyboard focus for controls (the canvas is not a control, so keep it clear). */
+:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.7);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+canvas:focus-visible {
+  outline: none;
+}
+
+/* Star twinkle — only for users who haven't asked for reduced motion. */
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes star-twinkle {
+    0%,
+    100% {
+      opacity: 0.3;
+    }
+    50% {
+      opacity: 0.95;
+    }
+  }
+  .star-tw {
+    animation: star-twinkle 4s ease-in-out infinite;
+  }
+}

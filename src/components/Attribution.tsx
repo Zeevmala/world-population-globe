@@ -5,13 +5,13 @@ export function Attribution() {
   if (!manifest) return null
 
   return (
-    <div className="text-[10px] text-white/40">
+    <div className="text-[10px] text-white/60">
       Data:{' '}
       <a
         href="https://www.kontur.io/datasets/population-dataset/"
         target="_blank"
         rel="noreferrer"
-        className="underline hover:text-white/70"
+        className="underline hover:text-white/90"
       >
         Kontur Population
       </a>{' '}
