@@ -1,12 +1,8 @@
 import type { LodData, LodEntry, Manifest } from '../types'
-import { readColumns } from './parquet'
+import { decodeTable } from './decodeClient'
 
 /** Vite base path ('/' in dev, '/world-population-globe/' in prod). */
 export const BASE = import.meta.env.BASE_URL
-
-function toF32(col: ArrayLike<unknown>): Float32Array {
-  return col instanceof Float32Array ? col : Float32Array.from(col as ArrayLike<number>)
-}
 
 /** Fetch and parse the data manifest. */
 export async function loadManifest(): Promise<Manifest> {
@@ -15,18 +11,19 @@ export async function loadManifest(): Promise<Manifest> {
   return (await res.json()) as Manifest
 }
 
-/** Load one whole (non-tiled) LOD tier into columnar typed arrays. */
+/**
+ * Load one whole (non-tiled) LOD tier into columnar typed arrays. The fetch and the
+ * decode both run in a worker (see `decodeClient`), so entering the `mid` band no
+ * longer freezes the camera for the duration of a 2 M-row parse.
+ */
 export async function loadLod(entry: LodEntry): Promise<LodData> {
   if (!entry.file) throw new Error(`LOD "${entry.lod}" has no file (tiled tiers must stream)`)
-  const cols = await readColumns(`${BASE}${entry.file}`, ['h3', 'population', 'lng', 'lat'])
+  const cols = await decodeTable(`${BASE}${entry.file}`)
   return {
     lod: entry.lod,
     h3Res: entry.h3Res,
     approxKm: entry.approxKm,
-    h3: Array.from(cols.h3 as ArrayLike<string>),
-    population: toF32(cols.population),
-    lng: toF32(cols.lng),
-    lat: toF32(cols.lat),
+    ...cols,
     maxPopulation: entry.maxPopulation,
   }
 }

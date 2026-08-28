@@ -4,6 +4,14 @@ import type { GlobeViewState, LodData, LodEntry, Manifest } from '../types'
 const MAX_RENDERED_CELLS = 120_000
 
 /**
+ * Zoom slack a tier keeps once it is on screen. Without it, a camera resting on a
+ * threshold (2.2 or 4.5) flips tiers on every sub-pixel zoom jitter, and each flip
+ * rebuilds and re-uploads the whole layer. A tier now has to be left by this much
+ * before it yields, so the boundary is crossed once, deliberately.
+ */
+const TIER_HYSTERESIS = 0.15
+
+/**
  * Choose the active LOD name for the current zoom: the finest tier whose
  * `minZoom` is satisfied AND whose data is already loaded, else the coarsest.
  */
@@ -11,32 +19,41 @@ export function pickLod(
   zoom: number,
   manifest: Manifest | null,
   loaded: Record<string, LodData>,
+  activeLod?: string | null,
 ): string | null {
   if (!manifest) return null
   let chosen: string | null = null
   for (const entry of manifest.lods) {
-    if (zoom >= entry.minZoom && loaded[entry.lod]) chosen = entry.lod
+    if (zoom >= entryZoom(entry, activeLod) && loaded[entry.lod]) chosen = entry.lod
   }
   return chosen ?? manifest.lods.find((l) => loaded[l.lod])?.lod ?? null
+}
+
+/** A tier's effective entry zoom — lowered by the hysteresis band while it is active. */
+function entryZoom(entry: LodEntry, activeLod?: string | null): number {
+  return entry.lod === activeLod ? entry.minZoom - TIER_HYSTERESIS : entry.minZoom
 }
 
 /**
  * Resolve the active tier + its data for the current view. The tiled r8 tier
  * wins when its zoom band is reached and viewport tiles are merged & ready;
  * otherwise fall back to the finest loaded whole tier ({@link pickLod}).
+ * Pass the currently-rendered tier as `activeLod` to apply {@link TIER_HYSTERESIS}
+ * so a camera parked on a threshold doesn't oscillate between tiers.
  */
 export function selectActive(
   view: GlobeViewState,
   manifest: Manifest | null,
   loaded: Record<string, LodData>,
   r8Data: LodData | null,
+  activeLod?: string | null,
 ): { entry?: LodEntry; data?: LodData } {
   if (!manifest) return {}
   const r8 = manifest.lods.find((l) => l.lod === 'r8')
-  if (r8 && view.zoom >= r8.minZoom && r8Data && r8Data.h3.length > 0) {
+  if (r8 && view.zoom >= entryZoom(r8, activeLod) && r8Data && r8Data.h3.length > 0) {
     return { entry: r8, data: r8Data }
   }
-  const lod = pickLod(view.zoom, manifest, loaded)
+  const lod = pickLod(view.zoom, manifest, loaded, activeLod)
   return { entry: manifest.lods.find((l) => l.lod === lod), data: lod ? loaded[lod] : undefined }
 }
 

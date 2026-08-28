@@ -30,7 +30,13 @@ export interface FlyTarget {
   latitude: number
   zoom: number
   id: number
+  /** Tween length; short for a zoom nudge, long for a cross-globe flight. */
+  durationMs?: number
 }
+
+/** Tween length for a zoom-button / keyboard nudge — long enough to read as motion,
+ *  short enough not to feel like waiting. */
+const ZOOM_TWEEN_MS = 420
 
 interface GlobeStore {
   manifest: Manifest | null
@@ -47,6 +53,8 @@ interface GlobeStore {
   isDragging: boolean
   /** Pending fly-to destination (animated by `Globe`); null when idle. */
   flyTarget: FlyTarget | null
+  /** Tier currently on screen — feeds LOD hysteresis and the scale readout. */
+  activeLod: string | null
 
   setManifest: (m: Manifest) => void
   addData: (d: LodData) => void
@@ -56,6 +64,7 @@ interface GlobeStore {
   setHover: (h: HoverInfo | null) => void
   setViewState: (v: GlobeViewState) => void
   setDragging: (on: boolean) => void
+  setActiveLod: (lod: string | null) => void
   rotateBy: (deg: number) => void
   zoomBy: (delta: number) => void
   flyTo: (lng: number, lat: number, zoom?: number) => void
@@ -78,6 +87,7 @@ export const useGlobeStore = create<GlobeStore>((set) => ({
   autoRotate: !HASH_VIEW && !prefersReducedMotion(),
   isDragging: false,
   flyTarget: null,
+  activeLod: null,
 
   setManifest: (manifest) => set({ manifest }),
   addData: (d) => set((s) => ({ data: { ...s.data, [d.lod]: d } })),
@@ -89,17 +99,32 @@ export const useGlobeStore = create<GlobeStore>((set) => ({
   // Idempotent guard: only write (and re-render) on an actual edge, so the
   // per-frame interaction callback doesn't churn the store while dragging.
   setDragging: (on) => set((s) => (s.isDragging === on ? s : { isDragging: on })),
+  // Same idempotent-edge guard: written from a render effect, so it must not
+  // re-enter when the tier is unchanged.
+  setActiveLod: (lod) => set((s) => (s.activeLod === lod ? s : { activeLod: lod })),
   rotateBy: (deg) =>
     set((s) => ({
       viewState: { ...s.viewState, longitude: wrapLng(s.viewState.longitude + deg) },
     })),
   // Center-only zoom (lng/lat fixed) — the zoom mode GlobeView supports, unlike
-  // cursor-anchored scroll-zoom. Clamped to the view's min/max.
+  // cursor-anchored scroll-zoom. Clamped to the view's min/max. Routed through the
+  // fly tween rather than snapping the camera: an instant zoom jump reads as a glitch
+  // and skips every LOD band in one frame, forcing a data load and a full re-cull on
+  // the same tick. Repeat clicks accumulate, because each reads the live (mid-tween) zoom.
   zoomBy: (delta) =>
     set((s) => {
       const { zoom, minZoom = -2, maxZoom = 8 } = s.viewState
       const next = Math.min(maxZoom, Math.max(minZoom, zoom + delta))
-      return { viewState: { ...s.viewState, zoom: next } }
+      if (next === zoom) return s
+      return {
+        flyTarget: {
+          longitude: s.viewState.longitude,
+          latitude: s.viewState.latitude,
+          zoom: next,
+          id: Date.now(),
+          durationMs: ZOOM_TWEEN_MS,
+        },
+      }
     }),
   // Request an animated flight (run by `Globe`); stops auto-rotation. Defaults to a
   // city-scale zoom (5 → r8 streams in) unless the current view is already deeper.

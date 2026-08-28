@@ -8,20 +8,70 @@
 ## Loop contract
 
 ```
-TRIGGER : manual `pwsh ./Invoke-RalphLoop.ps1` (ralph) | `/loop` tick (.claude/loop.md) | /goal
+TRIGGER : Routine "globe factory tick" (every 3 h, fresh session) | manual
+          `pwsh ./Invoke-RalphLoop.ps1` (ralph) | `/loop` tick (.claude/loop.md) | /goal
 SCOPE   : this repo only, branch loop/auto in a dedicated worktree — never the main checkout;
           src/**, pipeline/**, scripts/**, docs/**, specs/**, index.html;
           public/data/** changes only via re-running the pipeline
 ACTION  : take the FIRST unchecked item below → implement exactly that item → verify
-VERIFY  : `npm run verify` exit 0 (eslint + tsc -b + vite build); pipeline/** touched →
-          re-run the script and confirm integrity asserts (Σ ≈ 8.03 B, per-file < 100 MB);
-          deploys gated by the CI `verify-live` job
+VERIFY  : `npm run verify` exit 0 (eslint + tsc -b + vite build); render-path change →
+          `npm run qa:render` (frame/stall/console gate); pipeline or data touched →
+          `npm run verify:data` (Σ ≈ 8.03 B, per-file < 100 MB, H3 roll-up);
+          deploys additionally gated by the CI `verify-live` job
 BUDGET  : ≤ 12 iterations/run · 1 item/tick · ≤ 3 sub-agents/tick
 STOP    : queue empty | blocked sentinel present | no-progress ×3 (HEAD + dirty-tree hash)
 REPORT  : conventional commits + `[x]` flips here; sprint-level summary → PROJECT_STATE.md
 ```
 
 ## Queue
+
+- [ ] LOD cross-fade: with encoding now continuous across tiers (density domain +
+      zoom-continuous height), the remaining seam at zoom 2.2/4.5 is purely geometric —
+      22 km hexes are replaced by 3 km hexes in one frame. Render both tiers for ~250 ms
+      at the crossing and cross-fade opacity (`layers/useGlobeLayers.ts`, driven off the
+      `activeLod` transition in `store/useGlobeStore.ts`). Accept: no visible pop at either
+      threshold in `npm run qa:render` screenshots; ≤ 120 k cells/frame still holds across
+      the fade (cap the *sum* of both layers); no frame > 100 ms attributable to the fade;
+      `npm run verify` green.
+- [ ] Cull-boundary popping: `cullForView` swaps its 120 k top-k set on each re-cull, so
+      cells blink in/out at the window edge during a pan. Fade newly-added cells in over
+      ~150 ms, or widen the scan window and stabilize the selection between adjacent cull
+      keys (`lib/lod.ts`). Accept: pan at z 3–5 shows no blinking cells in a qa:render
+      frame diff; cap and highest-density semantics preserved; `npm run verify` green.
+- [ ] Wire the render gate into CI: run `npm run qa:render` in `.github/workflows/ci.yml`
+      against a built preview, uploading the report + screenshots as artifacts, and fail on
+      console errors or a stall regression vs `scripts/qa/baseline-main.json`. Accept: CI
+      job green on a clean PR and red on a deliberately-broken render; runtime < 6 min;
+      `npm run verify` green.
+- [ ] Night-lights basemap toggle: swap the dark-ocean sphere texture for NASA Black Marble
+      (public domain) behind a `Controls.tsx` toggle; columns must stay legible
+      (data > basemap). Accept: toggle works both ways at overview and r8 zoom; attribution
+      line updated; `npm run verify` green; 0 console errors.
+- [ ] Pole-aware viewport cull: `cullForView` uses a fixed lng/lat window, so near the poles
+      a longitude window covers far less ground than at the equator — the cull over-scans
+      there and can under-cover at high latitude. Scale the longitude half-span by
+      `1/cos(lat)` (clamped). Accept: cell counts at lat 70° comparable to lat 0° for the
+      same zoom; no empty edges; `npm run verify` green.
+
+## Backlog (needs breakdown before queueing)
+
+- PWA offline — app-shell SW is easy; the 502 MB tile pyramid is not. Needs a caching-scope
+  decision (shell + overview only vs. visited-tile cache with eviction).
+- Time-series / population animation — needs a data-source decision. Kontur publishes a
+  single snapshot (see `docs/data.md`); a time series means a second source entirely.
+- Sub-tile frustum culling (beyond the current lng/lat window cull) + smarter pan prefetch.
+- Tile migration to a CDN/release asset if the in-repo pyramid outgrows GitHub Pages limits.
+- Exact per-cell H3 areas for the density encoding (currently the resolution's nominal
+  average — <1% of ramp position, but exact would need the area precomputed in the pipeline
+  as a fourth column, not computed client-side at 3.6 µs/cell).
+
+## Blocked
+
+(none)
+
+## Done
+
+(queue established 2026-06-11)
 
 - [x] Responsive mobile framing: on tall portrait (375×812) the globe sits small and high
       with dead space below (Sprint 4 QA note). Add a responsive default zoom and/or vertical
@@ -68,23 +118,3 @@ REPORT  : conventional commits + `[x]` flips here; sprint-level summary → PROJ
       live at Shanghai z5.2: fetch log shows two bursts — 13 visible tiles at t≈0, then 10
       prefetch-ring tiles at t≈3.7s (idle) — and a +6° pan into the warmed ring fetched 0
       tiles (no flash). 0 console errors; `npm run verify` exit 0.)*
-- [ ] Night-lights basemap toggle: swap the dark-ocean sphere texture for NASA Black Marble
-      (public domain) behind a `Controls.tsx` toggle; columns must stay legible
-      (data > basemap). Accept: toggle works both ways at overview and r8 zoom; attribution
-      line updated; `npm run verify` green; 0 console errors.
-
-## Backlog (needs breakdown before queueing)
-
-- PWA offline — app-shell SW is easy; the 502 MB tile pyramid is not. Needs a caching-scope
-  decision (shell + overview only vs. visited-tile cache with eviction).
-- Time-series / population animation — needs a data-source and format decision first.
-- Sub-tile frustum culling (beyond the current lng/lat window cull) + smarter pan prefetch.
-- Tile migration to a CDN/release asset if the in-repo pyramid outgrows GitHub Pages limits.
-
-## Blocked
-
-(none)
-
-## Done
-
-(queue established 2026-06-11 — completed items get flipped to `- [x]` in place above)
