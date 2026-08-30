@@ -1,7 +1,7 @@
 # PROJECT_STATE — `world-population-globe`
 
 > PM tracker. Source of truth for sprint status and iteration loop.
-> Last updated: 2026-06-17.
+> Last updated: 2026-08-30.
 
 ## Product
 
@@ -193,6 +193,92 @@ change and no star-shadow-class regression risk (see Sprint 5 postmortem).
   reduced-motion branches (an OS setting). `preview_screenshot` still hangs on the WebGL canvas,
   so all visual asserts went through eval oracles, not pixels.
 
+## Status: Sprint 7 — one encoding across every tier, decode off the main thread ✅ SHIPPED
+
+User brief: run the factory continuously and make this a cartographic benchmark, along
+three axes — smooth rendering at all zoom levels, SOTA UX/UI, solid updated data. Four
+tracks ran in parallel (encoding/render, data integrity + upstream freshness, UX shell,
+headless render-QA harness).
+
+| # | Task | State |
+|---|---|---|
+| 1 | Density encoding on one cross-tier domain (`lib/density.ts`) | ✅ done |
+| 2 | Zoom-continuous column height (`lib/scales.ts` `maxColumnHeightM`) | ✅ done |
+| 3 | Parquet fetch + decode in a worker pool; packed H3 column | ✅ done |
+| 4 | LOD tier hysteresis + tweened zoom | ✅ done |
+| 5 | Truthful legend (real people/km² log ticks) + hover readout | ✅ done |
+| 6 | SOTA UX shell: responsive HUD, keyboard driver, shortcuts, first-run cue | ✅ done |
+| 7 | `npm run verify:data` — local data gate over all 12,761 tiles | ✅ done |
+| 8 | `npm run qa:render` — headless render/stall/console gate + baseline | ✅ done |
+| 9 | Upstream data freshness audit (`docs/data.md`) | ✅ done |
+| 10 | 24/7 cadence: PR-gated Routine every 6 h off `specs/TODO.md` | ✅ done |
+
+### The defect that motivated the sprint
+Each tier normalized population against its **own** maximum (r4 22.7 M, r6 1.95 M, r8
+40.7 k) while cell area changes **2,400×** between r4 and r8. So the same place drew a
+different color on each side of zoom 2.2 and 4.5, the legend's "density" label described
+a quantity the map was not drawing, and column height — a per-tier constant
+`approxKm × 32,000` — collapsed **7.3×** in one frame at a crossing.
+
+### Verification log (Sprint 7)
+- **Encoding continuity (computed from the shipped manifest):** shared domain
+  **55,163 people/km²**; tier maxima now normalize to **0.866 / 0.998 / 1.000** instead of
+  1.00 / 1.00 / 1.00. Height across the crossings: z2.19 **333,395 m** → z2.21
+  **326,873 m** (2%, the smooth zoom decay), where it was 704 km → 96 km. At 4.5:
+  34,382 m → 33,710 m.
+- **Packed H3 column:** 2,090,083 real indices across r4/r6/r8 round-trip
+  `BigInt('0x'+s).toString(16) === s` with **0 mismatches**; every index exactly 15 hex
+  chars, as the mode-1 bit guarantees.
+- **Decode cost (node, on the committed data):** mid tier **2,440 ms** — metadata 4 ms,
+  population 296 ms, lng 163 ms, lat 164 ms, **h3 1,817 ms**. That is the work that used
+  to land on the main thread the moment the camera crossed 2.2.
+- **Live browser (dev, SwiftShader):** 2 decode workers spawned, `mid.parquet` fetched
+  off-thread, 2,016,971 cells, **exactly 120,000 rendered** (cap holds), `elevationScale`
+  245,459 m at z2.5 matching the profile, **0 console errors**.
+- **`npm run verify:data`:** ALL PASS in 19 s — all 12,761 tiles read whole, 32,957,699
+  cells, per-tier sums 8,031,924,025 / …024 / …024, H3 parent roll-up, CRS bounds, every
+  file < 100 MB. Proved to fail under six deliberate tamperings (deleted tile, inflated
+  cellCount, mislabelled parent, corrupted sums, orphan dir) → 15 failures, exit 1.
+- **`npm run qa:render`:** VERDICT **PASS**, **0 console errors**, cap never exceeded, in
+  both the baseline (`scripts/qa/baseline-main.json`, pre-change `main` at `f5fc6cdc`) and
+  the HEAD run.
+- **Entry chunk:** 219.78 kB / **70.21 kB gzip** (was 65 KB). The HUD work is the cost;
+  `ShortcutsDialog` and `FirstRunCue` are lazy. `VISION.md` updated to the real figure
+  rather than leaving the stated budget contradicted.
+
+### What the render harness could NOT show — and why
+The headless harness runs on **SwiftShader**, a CPU rasterizer. Both runs recorded
+**27 main-thread blocks over 500 ms** (baseline worst 41,415 ms; HEAD worst 50,448 ms),
+and the freezes fall into exactly two per sample — one "steady-state pan", one "settle
+after camera move" — at every zoom, including zooms that load no data at all. They are
+software rasterization of 40–95 k extruded hexagons on a contended 4-CPU box, an order of
+magnitude larger than the 2.44 s decode and unrelated to it. **The harness therefore
+cannot resolve the worker win, and the run-to-run difference above must not be read as a
+regression** (the harness's own noise measurement is up to 2.2× on a single sample, and
+its regression gate is 3×). The decode win rests on the direct 2,440 ms measurement plus
+the structural proof that the work now runs in a worker.
+An earlier worker-vs-inline A/B was **discarded**: it ran while two agents' browsers
+saturated the box (3 frames recorded, a 36 s "long task"), which is renderer starvation,
+not a block. A clean comparison needs an idle machine, and preferably real GPU hardware.
+- **One genuine functional delta at the 4.5 crossing:** the baseline ended on `mid`
+  (15,412 cells); HEAD reaches **r8** (94,864 cells).
+
+### Data provenance check (Sprint 7)
+No Kontur release newer than the shipped **2023-11-01** exists. All 1,004 candidate dates
+2024-01-01 → 2026-09-30 were probed on the exact S3 path the pipeline downloads from —
+zero hits — with a 2022–2023 sweep returning exactly `20231101` as a positive control. The
+upstream r4 GeoPackage was downloaded and its schema confirmed against
+`detect_columns()` (EPSG:3857, `population(fid, geom, h3, population)`, 71,283 rows).
+Details and the refresh runbook: [`docs/data.md`](docs/data.md).
+
+Also fixed: `pipeline/build_tiles.py` defaulted `--tile-parent-res` to **2** — the
+resolution `docs/architecture.md` §3b explicitly rejects — so `npm run data:tiles` would
+silently build tens-of-MB r2 tiles instead of regenerating the shipped r3 pyramid, passing
+every guard while quietly regressing bandwidth. Default corrected to 3.
+
+Corrected in `CLAUDE.md`: r6 sums to **8,031,924,024**, not …025. Only r4 differs, and
+that is float32 rounding in the pipeline's `CAST(... AS FLOAT)` — not a data difference.
+
 ## Iteration loop
 
 Human / sprint cadence (this file is the PM log):
@@ -201,7 +287,13 @@ Human / sprint cadence (this file is the PM log):
 3. Implement (typed, vectorized, modular).
 4. **Verify (all layers below)** → 5. Update this file + commit → 6. Deploy via CI → 7. **Post-deploy gate**.
 
-Autonomous cadence (loop-engineering scaffolding, added 2026-06-11):
+Autonomous cadence (loop-engineering scaffolding, added 2026-06-11; continuous since 2026-08-30):
+- **Scheduled trigger:** Routine "world-population-globe — factory tick", cron `10 */6 * * *`
+  (every 6 h, fresh session). Each fire: health-check the live site, take the FIRST unchecked
+  item in `specs/TODO.md`, implement it, run the verifier chain, commit, push `loop/auto`,
+  open/update a PR. **It never pushes to `main`** — `main` auto-deploys to the public site, so
+  every autonomous change stays behind a human merge. If a fired session has no GitHub tooling
+  it still pushes the branch and prints the compare link.
 - **Queue + loop contract:** [`specs/TODO.md`](specs/TODO.md) — the loop's spine; one item = one tick = one commit.
 - **Anchors read every tick:** [`CLAUDE.md`](CLAUDE.md) operating rules + invariants; [`VISION.md`](VISION.md) north star.
 - **Per-tick prompt:** [`PROMPT.md`](PROMPT.md); **runner:** [`Invoke-RalphLoop.ps1`](Invoke-RalphLoop.ps1)

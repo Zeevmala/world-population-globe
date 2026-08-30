@@ -254,6 +254,21 @@ export function runAnimation(options) {
   return new Promise((resolve) => {
     const store = window.__globe
     const startView = store ? { ...store.getState().viewState } : { longitude: 0, latitude: 0, zoom: 0 }
+    // deck.gl coalesces work: a camera write does not redraw on the very next rAF,
+    // so a run of 30 ms "frames" can sit in front of the one frame that actually
+    // paid for the redraw. Sampling deck's own redraw counter per tick separates
+    // idle ticks from real frames, which is the difference between a p50 of 30 ms
+    // and the truth.
+    const redrawCount = () => {
+      try {
+        const stat = window.__deck.stats.get('Redraw Count')
+        return typeof stat.count === 'number' ? stat.count : null
+      } catch {
+        return null
+      }
+    }
+    let prevRedraws = redrawCount()
+    const drew = []
     const deltas = []
     const samples = []
     const longtaskBase = window.__qa ? window.__qa.longtasks.length : 0
@@ -264,6 +279,9 @@ export function runAnimation(options) {
     const tick = (now) => {
       deltas.push(now - last)
       last = now
+      const redraws = redrawCount()
+      drew.push(redraws === null || prevRedraws === null ? null : redraws - prevRedraws > 0)
+      prevRedraws = redraws
       const state = store && store.getState()
       const next = state ? { ...state.viewState } : null
       if (options.mode === 'passive') {
@@ -286,6 +304,8 @@ export function runAnimation(options) {
         const entries = window.__qa ? window.__qa.longtasks.slice(longtaskBase) : []
         resolve({
           deltas,
+          drew,
+          redrawCounterAvailable: prevRedraws !== null,
           elapsed: performance.now() - t0,
           requested: options.frames,
           samples,

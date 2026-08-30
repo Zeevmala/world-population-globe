@@ -25,23 +25,34 @@
  *   --port <n>            dev-server port (default 5199)
  *   --json <path>         write the JSON report here (default scripts/qa/out/render-qa.json)
  *   --baseline <path>     compare against a previous report; regressions fail the run
- *   --quick               short plan (~1 min) for iterating
+ *   --quick               5-step plan (one region, both crossings) for iterating
  *   --out <dir>           screenshot directory (default scripts/qa/out)
  *   --no-screenshots      skip PNG capture
  *   --max-stall-ms <n>    also fail if a steady-state frame exceeds this (default: off,
  *                         because absolute frame times under SwiftShader are not a
  *                         hardware-comparable number)
- *   --budget-ms <n>       stop sampling after this much wall clock (default 420000)
+ *   --regress-factor <n>  how many times slower than the baseline counts as a regression
+ *                         (default 3 — same-code noise here reaches ~2.2x; tighten on
+ *                         a quiet machine or a real GPU)
+ *   --budget-ms <n>       stop sampling after this much wall clock (default 1800000)
+ *   --width / --height    viewport (default 900x560; DPR is pinned to 1)
+ *   --frames / --anim-ms  per-sample animation length (default 24 frames, 1200 ms cap)
+ *   --settle-timeout <n>  per-sample settle cap (default 60000)
+ *
+ * A full run samples 13 camera states plus the two cold tier crossings. On a GPU that is
+ * quick; under SwiftShader on a contended box expect 6-12 minutes, so --quick exists for
+ * iteration and --budget-ms bounds the worst case.
  *
  * Exit: 0 pass · 1 regression/defect · 2 harness error.
  */
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { cpus, loadavg } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { launchBrowser, probeWebgl, GL_FLAGS } from './browser.mjs'
-import { ensureDevServer } from './server.mjs'
+import { ensureDevServer, verifyServedRoot } from './server.mjs'
 import { scorePngFile } from './png.mjs'
 import {
   PROBE_INIT,
@@ -58,8 +69,8 @@ import {
 import {
   MAX_RENDERED_CELLS,
   FREEZE_MS,
+  animationStats,
   compareToBaseline,
-  frameStats,
   printSummary,
   worstStall,
 } from './report.mjs'
@@ -96,20 +107,20 @@ function buildPlan(quick) {
   if (quick) {
     return [
       { type: 'sample', region: 'tokyo', zoom: 1.3 },
-      { type: 'crossing', id: 'cross-2.2', region: 'tokyo', from: 2.0, to: 2.45, frames: 20 },
+      { type: 'crossing', id: 'cross-2.2', region: 'tokyo', from: 2.0, to: 2.45, frames: 4 },
       { type: 'sample', region: 'tokyo', zoom: 2.3 },
-      { type: 'crossing', id: 'cross-4.5', region: 'tokyo', from: 4.3, to: 4.7, frames: 20 },
+      { type: 'crossing', id: 'cross-4.5', region: 'tokyo', from: 4.3, to: 4.7, frames: 4 },
       { type: 'sample', region: 'tokyo', zoom: 4.6 },
     ]
   }
   const steps = []
   for (const zoom of [0.5, 1.3, 2.0]) steps.push({ type: 'sample', region: 'tokyo', zoom })
-  steps.push({ type: 'crossing', id: 'cross-2.2', region: 'tokyo', from: 2.0, to: 2.45, frames: 24 })
+  steps.push({ type: 'crossing', id: 'cross-2.2', region: 'tokyo', from: 2.0, to: 2.45, frames: 4 })
   for (const zoom of [2.3, 3.0, 4.0]) steps.push({ type: 'sample', region: 'tokyo', zoom })
-  steps.push({ type: 'crossing', id: 'cross-4.5', region: 'tokyo', from: 4.3, to: 4.7, frames: 24 })
+  steps.push({ type: 'crossing', id: 'cross-4.5', region: 'tokyo', from: 4.3, to: 4.7, frames: 4 })
   for (const zoom of [4.6, 5.5, 6.5]) steps.push({ type: 'sample', region: 'tokyo', zoom })
-  for (const zoom of [2.3, 4.6, 6.5]) steps.push({ type: 'sample', region: 'cairo', zoom })
-  for (const zoom of [1.3, 2.3, 4.6]) steps.push({ type: 'sample', region: 'ocean', zoom })
+  for (const zoom of [2.3, 5.5]) steps.push({ type: 'sample', region: 'cairo', zoom })
+  for (const zoom of [1.3, 4.6]) steps.push({ type: 'sample', region: 'ocean', zoom })
   return steps
 }
 
@@ -124,12 +135,13 @@ function parseArgs(argv) {
     out: join(REPO_ROOT, 'scripts', 'qa', 'out'),
     screenshots: true,
     maxStallMs: 0,
-    budgetMs: 420_000,
-    width: 1024,
-    height: 640,
-    settleTimeoutMs: 45_000,
-    animFrames: 40,
-    animMaxMs: 3500,
+    regressFactor: 3,
+    budgetMs: 1_800_000,
+    width: 900,
+    height: 560,
+    settleTimeoutMs: 60_000,
+    animFrames: 24,
+    animMaxMs: 1200,
   }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
@@ -144,6 +156,7 @@ function parseArgs(argv) {
       case '--quick': opts.quick = true; break
       case '--no-screenshots': opts.screenshots = false; break
       case '--max-stall-ms': opts.maxStallMs = Number(next()); break
+      case '--regress-factor': opts.regressFactor = Number(next()); break
       case '--budget-ms': opts.budgetMs = Number(next()); break
       case '--width': opts.width = Number(next()); break
       case '--height': opts.height = Number(next()); break
@@ -166,6 +179,27 @@ function printHelp() {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const log = (msg) => console.log(msg)
 
+// Held at module scope so a mid-run failure still tears down the browser and any
+// dev server this process started — a leaked headless Chromium or a stray server on
+// the port would poison the next run (and every other agent sharing the box).
+let activeBrowser = null
+let activeServer = null
+
+async function cleanup() {
+  try {
+    if (activeBrowser) await activeBrowser.close()
+  } catch {
+    /* already gone */
+  }
+  activeBrowser = null
+  try {
+    if (activeServer) await activeServer.stop()
+  } catch {
+    /* already gone */
+  }
+  activeServer = null
+}
+
 function gitInfo(root) {
   const run = (args) => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8' }).trim()
   try {
@@ -187,19 +221,26 @@ function tierAvailable(state, tier) {
  * network and the frame loop both go quiet (the sparse-ocean case, where the r8
  * pyramid legitimately has no tiles to stream and the tier never arrives).
  */
-async function settleAt(page, ctx, { tier, timeoutMs, quietMs = 2500 }) {
+async function settleAt(page, ctx, { tier, timeoutMs, quietMs = 5000 }) {
   const t0 = Date.now()
   let tierReached = false
+  let lastBusyAt = t0
   let last = null
   while (Date.now() - t0 < timeoutMs) {
+    // A round trip into the page can only complete when the main thread is free, so
+    // its latency IS a main-thread-busy probe. This matters: a 31 MB parquet fetch
+    // finishes on the network in a second and then blocks the thread for another
+    // thirty parsing, and a network-idle-only settle would call that "done".
+    const rtt0 = Date.now()
     last = await page.evaluate(readAppState)
+    if (Date.now() - rtt0 > 400) lastBusyAt = Date.now()
     if (last.status === 'error') break
     if (tierAvailable(last, tier)) { tierReached = true; break }
-    const idleFor = Date.now() - Math.max(ctx.lastNetworkAt, t0)
+    const idleFor = Date.now() - Math.max(ctx.lastNetworkAt, lastBusyAt, t0)
     if (ctx.inFlight === 0 && idleFor > quietMs) break
     await sleep(200)
   }
-  const quiet = await page.evaluate(quietFrames, 4000)
+  const quiet = await page.evaluate(quietFrames, 3000)
   const longtasks = await page.evaluate(collectLongtasks)
   const state = await page.evaluate(readAppState)
   return {
@@ -233,15 +274,35 @@ async function main() {
 
   const startedAt = Date.now()
   const findings = { failures: [], warnings: [] }
+  const freezes = []
+  const loadStart = loadavg().map((n) => Math.round(n * 100) / 100)
 
   // ---- target -------------------------------------------------------------
   let server = { url: opts.url, started: false, stop: async () => {} }
   if (!opts.url) server = await ensureDevServer({ root: opts.root, port: opts.port, log })
+  activeServer = server
   const baseUrl = server.url.replace(/\/+$/, '') + '/'
   const git = gitInfo(opts.url ? REPO_ROOT : opts.root)
 
+  // Attaching to a port someone else opened is the one way this harness can lie:
+  // it would report `--root`'s commit while measuring a different checkout. Check
+  // the served sources against that root before believing anything.
+  let servedRoot = null
+  if (!opts.url && !server.started) {
+    servedRoot = await verifyServedRoot({ url: baseUrl, root: opts.root })
+    if (!servedRoot.match) {
+      findings.warnings.push(
+        `the server already on port ${opts.port} does not appear to be serving ${opts.root} (${JSON.stringify(servedRoot.files)}) — the commit in this report may not be the code that was measured. Stop that server, or pass --port.`,
+      )
+      log(`WARNING: port ${opts.port} is serving a different checkout than --root`)
+    } else {
+      log(`verified: the server on port ${opts.port} is serving ${opts.root}`)
+    }
+  }
+
   // ---- browser ------------------------------------------------------------
   const { browser, page, executablePath, version } = await launchBrowser({ width: opts.width, height: opts.height })
+  activeBrowser = browser
   const preflight = await probeWebgl(page)
   log(`chromium ${version} at ${executablePath}`)
   log(`WebGL2 preflight: ${preflight.ok ? 'OK' : 'FAILED'} — ${preflight.renderer}`)
@@ -337,7 +398,7 @@ async function main() {
         await page.waitForFunction(() => document.querySelector('canvas') !== null, null, { timeout: 60_000 }).catch(() => {})
       }
 
-      const timeoutMs = region.density === 'sparse' ? Math.min(opts.settleTimeoutMs, 15_000) : opts.settleTimeoutMs
+      const timeoutMs = region.density === 'sparse' ? Math.min(opts.settleTimeoutMs, 20_000) : opts.settleTimeoutMs
       const settle = driveable
         ? await settleAt(page, ctx, { tier: expectedTier(step.zoom), timeoutMs })
         : { ms: 0, tierReached: null, quiet: null, worstStallMs: 0, longtasks: [], state: {} }
@@ -352,7 +413,7 @@ async function main() {
         frames: opts.animFrames,
         maxMs: opts.animMaxMs,
       })
-      const frame = frameStats(anim.deltas)
+      const frame = animationStats(anim)
       const stall = worstStall(anim.deltas, anim.longtasks)
 
       const tier = state.tier ?? null
@@ -371,8 +432,9 @@ async function main() {
       if (opts.maxStallMs > 0 && stall > opts.maxStallMs) {
         findings.failures.push(`${id}: steady-state frame/stall of ${stall} ms exceeds --max-stall-ms ${opts.maxStallMs}`)
       }
-      if (stall >= FREEZE_MS) {
-        findings.warnings.push(`${id}: worst steady-state block ${stall} ms (>${FREEZE_MS} ms reads as a freeze)`)
+      if (stall >= FREEZE_MS) freezes.push({ phase: id, ms: stall, where: 'steady-state pan' })
+      if (settle.worstStallMs >= FREEZE_MS) {
+        freezes.push({ phase: id, ms: settle.worstStallMs, where: 'settle after camera move' })
       }
 
       samples.push({
@@ -421,15 +483,23 @@ async function main() {
       const before = await settleAt(page, ctx, { tier: expectedTier(step.from), timeoutMs: opts.settleTimeoutMs })
 
       await page.evaluate(markPhase)
+      // A ramp frame can cost seconds here, and the wall-clock cap is only checked
+      // between frames, so a short cap would stop the ramp *before* it reached the
+      // threshold — measuring a crossing that never happened. Give the ramp room,
+      // then pin the camera on the far side regardless, so the cold-load cost after
+      // the boundary is always measured. `rampReachedZoom` records how far the
+      // animated part actually got.
       const anim = await page.evaluate(runAnimation, {
         mode: 'zoom',
         zoomFrom: step.from,
         zoomTo: step.to,
         frames: step.frames,
-        maxMs: 20_000,
+        maxMs: 30_000,
       })
+      const rampReachedZoom = anim.endView ? Math.round(anim.endView.zoom * 1000) / 1000 : null
+      await page.evaluate(setCamera, { longitude: region.longitude, latitude: region.latitude, zoom: step.to })
       const after = await settleAt(page, ctx, { tier: expectedTier(step.to), timeoutMs: opts.settleTimeoutMs })
-      const frame = frameStats(anim.deltas)
+      const frame = animationStats(anim)
       const stall = Math.max(worstStall(anim.deltas, anim.longtasks), after.worstStallMs)
       const shot = await capture(page, opts, step.id, findings)
 
@@ -438,8 +508,15 @@ async function main() {
           `P0 invariant: ${step.id} rendered ${after.state.renderedCells} cells/frame after the crossing, over the ${MAX_RENDERED_CELLS} cap`,
         )
       }
-      if (stall >= FREEZE_MS) {
-        findings.warnings.push(`${step.id}: crossing froze the main thread for ${stall} ms (>${FREEZE_MS} ms)`)
+      if (stall >= FREEZE_MS) freezes.push({ phase: step.id, ms: stall, where: `zoom ramp ${step.from} → ${step.to} + settle` })
+      // A dense metro has data in every tier, so a tier that never arrives after the
+      // camera has crossed its threshold is a defect, not a slow machine. It is
+      // reported rather than failed because it is a standing bug, not a regression —
+      // see the note in the report's `findings`.
+      if (!after.tierReached && after.state.tier !== expectedTier(step.to)) {
+        findings.warnings.push(
+          `${step.id}: the "${expectedTier(step.to)}" tier never became active after the crossing (still "${after.state.tier}" after ${Math.round(after.ms)} ms). Check the request log for this phase: no tile fetch means the streaming effect short-circuited.`,
+        )
       }
 
       crossings.push({
@@ -447,6 +524,7 @@ async function main() {
         region: region.label,
         from: step.from,
         to: step.to,
+        rampReachedZoom,
         tierBefore: before.state.tier ?? null,
         tierAfter: after.state.tier ?? null,
         cellsBefore: before.state.renderedCells ?? null,
@@ -460,7 +538,7 @@ async function main() {
         consoleErrors: consoleErrors.filter((e) => e.phase === step.id),
       })
       log(
-        `    ${before.state.tier} → ${after.state.tier}, frames=${frame.frames} max=${frame.max}ms worst stall=${stall}ms settle=${after.ms}ms`,
+        `    ${before.state.tier} → ${after.state.tier}, ramp reached z${rampReachedZoom}, frames=${frame.frames} max=${frame.max}ms worst stall=${stall}ms settle=${after.ms}ms(tier reached: ${after.tierReached})`,
       )
     }
   }
@@ -469,8 +547,7 @@ async function main() {
   const finalGl = hasHandles ? await page.evaluate(readGl) : inAppGl
   if (hasHandles && !finalGl.ok) findings.failures.push('deck.gl WebGL context was lost during the run')
 
-  await browser.close()
-  await server.stop()
+  await cleanup()
 
   // ---- verdict ------------------------------------------------------------
   if (consoleErrors.length) {
@@ -488,16 +565,26 @@ async function main() {
       root: opts.url ? null : opts.root,
       commit: git.commit,
       dirty: git.dirty,
+      attachedToExistingServer: !opts.url && !server.started,
+      servedRootVerified: servedRoot ? servedRoot.match : null,
+      servedRootCheck: servedRoot,
       driveable,
     },
     browser: { executable: executablePath, version, flags: GL_FLAGS },
     viewport: { width: opts.width, height: opts.height, deviceScaleFactor: 1 },
+    host: {
+      cpus: cpus().length,
+      cpuModel: cpus()[0] ? cpus()[0].model : null,
+      loadStart,
+      loadEnd: loadavg().map((n) => Math.round(n * 100) / 100),
+    },
     config: {
       quick: opts.quick,
       animFrames: opts.animFrames,
       animMaxMs: opts.animMaxMs,
       settleTimeoutMs: opts.settleTimeoutMs,
       maxStallMs: opts.maxStallMs,
+      regressFactor: opts.regressFactor,
       maxRenderedCells: MAX_RENDERED_CELLS,
     },
     webgl: { preflight, inApp: inAppGl, readback, final: finalGl },
@@ -507,11 +594,15 @@ async function main() {
       'Frame deltas come from in-page requestAnimationFrame timestamps; the wall-clock cap on an animation can only be checked between frames, so a single multi-second frame overshoots it. `animElapsedMs` records the truth.',
       'p50/p95 with fewer than 10 frames are flagged `lowConfidence` — at deep zoom a single frame can exceed the whole animation budget, so there is little to take percentiles of.',
       'Long tasks come from PerformanceObserver `longtask`, which reports duration but attributes work only coarsely; a stall is located in time, not blamed on a specific call stack.',
+      `Measured on a ${cpus().length}-CPU box at load average ${loadStart[0]} — CPU contention from anything else running inflates every timing here. Compare runs taken under similar load, and treat the load figures in the report as part of the result.`,
+      'deck.gl coalesces redraws, so a camera write does not render on the next animation frame. Raw rAF percentiles therefore include idle ticks; the `redraw` series (ticks where deck.gl\'s Redraw Count advanced) is the cost of an actual rendered frame.',
+      'Run-to-run noise on identical code was measured at up to 2.2x on a single sample (few frames + a contended CPU), so the baseline comparison only fails above 3x by default (--regress-factor). It catches order-of-magnitude regressions; the exact checks — rendered-cell count, console errors, active tier, blank canvas — carry no tolerance.',
       'The dev server is unminified and unbundled (Vite serves ES modules) and the data is uncompressed on localhost, so load-side timings are not the deployed experience — `npm run verify:live` covers the CDN path.',
       ...(driveable ? [] : ['No __globe/__deck handles on this target: tier, rendered-cell and camera-driven measurements are unavailable; frame timing is a passive sample of the app\'s own animation.']),
     ],
     samples,
     crossings,
+    freezes,
     consoleErrors,
     consoleWarnings,
     pageErrors,
@@ -523,7 +614,7 @@ async function main() {
   if (opts.baseline) {
     try {
       const baseline = JSON.parse(readFileSync(opts.baseline, 'utf8'))
-      const comparison = compareToBaseline(report, baseline, opts.baseline)
+      const comparison = compareToBaseline(report, baseline, opts.baseline, opts.regressFactor)
       report.comparison = comparison
       findings.failures.push(...comparison.failures)
       findings.warnings.push(...comparison.warnings)
@@ -532,6 +623,12 @@ async function main() {
     }
   }
 
+  if (freezes.length) {
+    const worst = freezes.reduce((a, b) => (b.ms > a.ms ? b : a))
+    findings.warnings.push(
+      `${freezes.length} main-thread block(s) over ${FREEZE_MS} ms; worst ${worst.ms} ms at ${worst.phase} (${worst.where}) — see the FREEZES section`,
+    )
+  }
   report.verdict = { pass: findings.failures.length === 0, failures: findings.failures, warnings: findings.warnings }
   writeFileSync(opts.json, `${JSON.stringify(report, null, 2)}\n`)
 
@@ -542,7 +639,8 @@ async function main() {
   process.exit(report.verdict.pass ? 0 : 1)
 }
 
-main().catch((err) => {
+main().catch(async (err) => {
   console.error('\nrender_qa harness error:', err && err.stack ? err.stack : err)
+  await cleanup()
   process.exit(2)
 })

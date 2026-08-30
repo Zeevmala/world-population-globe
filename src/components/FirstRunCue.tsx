@@ -1,3 +1,5 @@
+import { useEffect } from 'react'
+import { useGlobeStore } from '../store/useGlobeStore'
 import { HudButton } from './HudButton'
 import { IconClose, IconDrag, IconSearch, IconZoomIn } from './icons'
 
@@ -13,6 +15,14 @@ interface FirstRunCueProps {
  * way for good (dismissal is remembered by `App` in localStorage).
  */
 export function FirstRunCue({ onDismiss, onShowHelp }: FirstRunCueProps) {
+  // Reading a cell *is* the thing the card is explaining, so the first pick (a hover on
+  // desktop, a tap on a phone) retires it — and on a 375 px screen that also keeps the
+  // card from sitting on top of the readout it just earned.
+  const picked = useGlobeStore((s) => s.hover !== null)
+  useEffect(() => {
+    if (picked) onDismiss()
+  }, [picked, onDismiss])
+
   return (
     <section
       aria-label="How to read this globe"
@@ -27,7 +37,7 @@ export function FirstRunCue({ onDismiss, onShowHelp }: FirstRunCueProps) {
             merely a big one.
           </p>
         </div>
-        <HudButton label="Dismiss" onClick={onDismiss} className="-mr-1.5 -mt-1.5 shrink-0">
+        <HudButton label="Dismiss" onClick={onDismiss} hideTip className="-mr-1.5 -mt-1.5 shrink-0">
           <IconClose />
         </HudButton>
       </div>

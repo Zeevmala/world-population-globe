@@ -11,6 +11,9 @@ interface HudButtonProps {
   /** Icon (decorative — the name lives on the button). */
   children: ReactNode
   className?: string
+  /** Suppress the hover tooltip where the button's meaning is already obvious
+   *  (a dialog's ✕), so the label doesn't float over the panel it closes. */
+  hideTip?: boolean
   /** For callers that must move focus here (e.g. a dialog's initial focus). */
   buttonRef?: RefObject<HTMLButtonElement | null>
 }
@@ -28,6 +31,7 @@ export function HudButton({
   onClick,
   children,
   className,
+  hideTip,
   buttonRef,
 }: HudButtonProps) {
   return (
@@ -40,10 +44,12 @@ export function HudButton({
       className={`hud-btn group relative ${className ?? ''}`}
     >
       {children}
-      <span className="hud-tip" aria-hidden="true">
-        {label}
-        {shortcut ? <kbd className="hud-kbd">{shortcut}</kbd> : null}
-      </span>
+      {hideTip ? null : (
+        <span className="hud-tip" aria-hidden="true">
+          {label}
+          {shortcut ? <kbd className="hud-kbd">{shortcut}</kbd> : null}
+        </span>
+      )}
     </button>
   )
 }

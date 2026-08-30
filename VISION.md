@@ -11,12 +11,15 @@ in-browser columnar reads, truthful cartography) with zero backend.
 
 - **Static-only.** GitHub Pages + CDN; no backend, no API keys, no paid services.
 - **Open data, attributed.** Kontur Population (CC-BY 4.0) credited in the UI; MIT code.
-- **Truthful cartography.** Perceptually uniform ramp (Inferno), `log1p` for right-skewed
-  population, no fabricated class breaks, data > labels > basemap.
+- **Truthful cartography.** Perceptually uniform ramp (Inferno), `log1p` over **people/km²**
+  on one domain shared by every LOD tier, no fabricated class breaks,
+  data > labels > basemap.
 - **Bounded render cost.** Any zoom renders ≤ 120 k culled cells/frame regardless of the
   33 M-cell dataset.
-- **Fast first paint.** Small entry chunk (~200 KB gzip 64 KB), deck.gl lazy-loaded,
-  overview tier ≈ 1.2 MB.
+- **Fast first paint.** Small entry chunk (~220 KB, gzip 70 KB — of which React + ReactDOM
+  is roughly two-thirds), deck.gl lazy-loaded, overview tier ≈ 1.2 MB. It was 64 KB gzip
+  before the accessible HUD (keyboard driver, shortcuts dialog, zoom ladder, first-run cue)
+  landed; the dialog and the cue are themselves lazy, since neither paints on arrival.
 
 ## What done looks like
 

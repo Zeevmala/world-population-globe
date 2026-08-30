@@ -82,7 +82,7 @@ export function ShortcutsDialog({ open, onClose }: ShortcutsDialogProps) {
               Mouse: drag to spin · scroll to zoom · hover a column for its numbers
             </p>
           </div>
-          <HudButton label="Close" onClick={onClose} buttonRef={closeRef} className="-mr-1 -mt-1">
+          <HudButton label="Close" onClick={onClose} buttonRef={closeRef} hideTip className="-mr-1 -mt-1">
             <IconClose />
           </HudButton>
         </div>

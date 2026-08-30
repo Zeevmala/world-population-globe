@@ -143,14 +143,17 @@ export function Controls({ onShowHelp, onShare, shareState }: ControlsProps) {
   const setViewState = useGlobeStore((s) => s.setViewState)
   const flyTo = useGlobeStore((s) => s.flyTo)
   const manifest = useGlobeStore((s) => s.manifest)
+  // The tier actually on screen, published by the layer — not re-derived from zoom here.
+  // Zoom alone would light "400 m" the instant the camera passes 4.5, while the globe is
+  // still drawing 3 km cells because the r8 tiles have not merged yet (and it would ignore
+  // the LOD hysteresis band). The ladder and the legend must name the same tier.
+  const activeLod = useGlobeStore((s) => s.activeLod)
   // Primitive selectors: the rail re-renders on zoom, not on every rotation frame.
   const zoom = useGlobeStore((s) => s.viewState.zoom)
   const minZoom = useGlobeStore((s) => s.viewState.minZoom ?? -1)
   const maxZoom = useGlobeStore((s) => s.viewState.maxZoom ?? 7)
 
   const bands = manifest ? bandsFor(manifest.lods, minZoom, maxZoom) : []
-  // Finest tier whose zoom band the camera has entered — the scale the columns show.
-  const activeLod = manifest?.lods.filter((l) => zoom >= l.minZoom).pop()?.lod ?? null
 
   // Mirrors the store's load-time framing (portrait needs a tighter hero zoom).
   const home = () => flyTo(25, 20, window.innerHeight > window.innerWidth * 1.4 ? 1.9 : 1.3)

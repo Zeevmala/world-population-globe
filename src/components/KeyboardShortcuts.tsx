@@ -21,6 +21,8 @@ interface KeyboardShortcutsProps {
   onShare: () => void
   /** Esc when nothing else claimed it (dialog / search handle their own). */
   onEscape: () => void
+  /** A modal owns the screen — camera keys are suppressed while it is up. */
+  modalOpen?: boolean
 }
 
 /**
@@ -33,6 +35,7 @@ export function KeyboardShortcuts({
   onToggleHelp,
   onShare,
   onEscape,
+  modalOpen = false,
 }: KeyboardShortcutsProps) {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -45,6 +48,10 @@ export function KeyboardShortcuts({
       // Text fields own their own keys, and the focused zoom slider (an <input>) must
       // keep its native arrow semantics — both are excluded by this one guard.
       if (typing) return
+
+      // Behind a modal only dismissal and the help toggle stay live: panning a globe
+      // you can't see is disorienting.
+      if (modalOpen && e.key !== 'Escape' && e.key !== '?') return
 
       const store = useGlobeStore.getState()
       const view = store.viewState
@@ -106,7 +113,7 @@ export function KeyboardShortcuts({
 
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [onFocusSearch, onToggleHelp, onShare, onEscape])
+  }, [onFocusSearch, onToggleHelp, onShare, onEscape, modalOpen])
 
   return null
 }

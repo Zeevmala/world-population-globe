@@ -12,8 +12,6 @@ import { Loader } from './components/Loader'
 import type { LoadStep } from './components/Loader'
 import { DataStatus } from './components/DataStatus'
 import { KeyboardShortcuts } from './components/KeyboardShortcuts'
-import { ShortcutsDialog } from './components/ShortcutsDialog'
-import { FirstRunCue } from './components/FirstRunCue'
 import { useGlobeStore } from './store/useGlobeStore'
 import { viewUrl } from './lib/urlState'
 
@@ -21,6 +19,16 @@ import { viewUrl } from './lib/urlState'
 // Lazy-load it so the UI shell + a spinner paint from a small entry chunk while the
 // heavy globe chunk streams in asynchronously (named export → default for `lazy`).
 const Globe = lazy(() => import('./components/Globe').then((m) => ({ default: m.Globe })))
+
+// Neither of these is on the first-paint path — the dialog opens on `?` or the help
+// button, and the cue only renders once data is ready and only for a first-time visitor.
+// Splitting them keeps the eager shell to what actually paints immediately.
+const ShortcutsDialog = lazy(() =>
+  import('./components/ShortcutsDialog').then((m) => ({ default: m.ShortcutsDialog })),
+)
+const FirstRunCue = lazy(() =>
+  import('./components/FirstRunCue').then((m) => ({ default: m.FirstRunCue })),
+)
 
 /** Bumped when the intro copy changes materially, so returning visitors see it again. */
 const INTRO_KEY = 'wpg.intro.v1'
@@ -130,6 +138,7 @@ export default function App() {
         onToggleHelp={toggleHelp}
         onShare={share}
         onEscape={onEscape}
+        modalOpen={helpOpen}
       />
 
       {/* HUD. The layer is inert by default and each island opts back in, so the globe
@@ -141,7 +150,9 @@ export default function App() {
           <div className="pointer-events-auto w-fit self-start">
             <Header />
           </div>
-          <div className="pointer-events-auto sm:absolute sm:left-1/2 sm:top-0 sm:w-80 sm:-translate-x-1/2">
+          {/* `z-10`: on a phone the open result list runs the full width, and it must
+              paint over the control rail rather than under it. */}
+          <div className="pointer-events-auto relative z-10 sm:absolute sm:left-1/2 sm:top-0 sm:w-80 sm:-translate-x-1/2">
             <Search inputRef={searchRef} />
             <DataStatus />
           </div>
@@ -167,14 +178,22 @@ export default function App() {
           </div>
         </div>
 
+        {/* First-run cue. On phones it stays clear of the right-hand rail (44 px + gutters)
+            so it never covers a control; on desktop it centres in the space below the globe. */}
         {introOpen && status === 'ready' ? (
-          <div className="pointer-events-auto absolute inset-x-3 bottom-28 flex justify-center sm:inset-x-0 sm:bottom-24">
-            <FirstRunCue onDismiss={dismissIntro} onShowHelp={openHelp} />
+          <div className="pointer-events-auto absolute bottom-28 left-3 right-[4.25rem] flex justify-center sm:inset-x-0 sm:bottom-24">
+            <Suspense fallback={null}>
+              <FirstRunCue onDismiss={dismissIntro} onShowHelp={openHelp} />
+            </Suspense>
           </div>
         ) : null}
       </div>
 
-      <ShortcutsDialog open={helpOpen} onClose={closeHelp} />
+      {helpOpen && (
+        <Suspense fallback={null}>
+          <ShortcutsDialog open={helpOpen} onClose={closeHelp} />
+        </Suspense>
+      )}
 
       {status === 'loading' && (
         <Loader
