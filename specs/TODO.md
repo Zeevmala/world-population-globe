@@ -38,6 +38,15 @@ REPORT  : conventional commits + `[x]` flips here; sprint-level summary → PROJ
       ~150 ms, or widen the scan window and stabilize the selection between adjacent cull
       keys (`lib/lod.ts`). Accept: pan at z 3–5 shows no blinking cells in a qa:render
       frame diff; cap and highest-density semantics preserved; `npm run verify` green.
+- [ ] Cache H3 cell boundaries across re-culls: measured on the real mid tier, a re-cull
+      at z2.5 costs ~284 ms of main-thread JS and **239 ms of that is `cellToBoundary` for
+      the 120 k rendered cells** (720 k vertices) — repaid in full on every re-cull during a
+      pan, even though most cells are unchanged between adjacent cull windows. Memoize the
+      boundary per H3 index (bounded LRU keyed on the packed `BigUint64` index, sized to a
+      few times the 120 k cap), or precompute boundaries in the decode worker alongside the
+      packed column. Accept: `cellToBoundary` cost on a repeat cull over an overlapping
+      window drops by ≥ 5×; no change to rendered geometry (same cells, same vertices);
+      memory stays bounded under a sustained pan; `npm run verify` green.
 - [ ] Wire the render gate into CI: run `npm run qa:render` in `.github/workflows/ci.yml`
       against a built preview, uploading the report + screenshots as artifacts, and fail on
       console errors or a stall regression vs `scripts/qa/baseline-main.json`. Accept: CI

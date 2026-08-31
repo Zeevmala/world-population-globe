@@ -246,6 +246,23 @@ a quantity the map was not drawing, and column height — a per-tier constant
   `ShortcutsDialog` and `FirstRunCue` are lazy. `VISION.md` updated to the real figure
   rather than leaving the stated budget contradicted.
 
+### Main-thread cost at a tier crossing, measured directly (2026-08-31, idle box)
+The decode moved to a worker; what remains on the main thread per re-cull/rebuild at
+z2.5 over Tokyo was timed against the real committed data, outside the browser:
+
+| phase | ms | where |
+|---|---|---|
+| pack 2 M h3 → `BigUint64Array` | 175 | **worker** (off main thread) |
+| `cullForView` scan + quickselect → 120 k | **34** | main |
+| materialize 120 k h3 strings from packed | **11** | main |
+| `cellToBoundary` × 120 k (720 k vertices) | **239** | main |
+| **total main-thread JS** | **~284** | |
+
+So ~84% of the remaining per-crossing JS cost is per-cell H3 boundary generation — the
+`highPrecision: 'auto'` hi-fi path — and `cellToBoundary` alone is a *lower bound* on it
+(deck.gl also tessellates and packs per-vertex attributes on top). That is the next real
+optimization target on actual hardware; queued in `specs/TODO.md`.
+
 ### What the render harness could NOT show — and why
 The headless harness runs on **SwiftShader**, a CPU rasterizer. Both runs recorded
 **27 main-thread blocks over 500 ms** (baseline worst 41,415 ms; HEAD worst 50,448 ms),
@@ -259,7 +276,17 @@ its regression gate is 3×). The decode win rests on the direct 2,440 ms measure
 the structural proof that the work now runs in a worker.
 An earlier worker-vs-inline A/B was **discarded**: it ran while two agents' browsers
 saturated the box (3 frames recorded, a 36 s "long task"), which is renderer starvation,
-not a block. A clean comparison needs an idle machine, and preferably real GPU hardware.
+not a block.
+
+Re-run on an **idle** box (load 0.41) at a deliberately tiny **360×280** viewport, the
+crossing still blocked **28,982 ms** (p50 a smooth 17 ms, so one frame carries all of it).
+That looked at first like a real regression — but the table above shows the JS accounts
+for only ~284 ms of it. The rest is SwiftShader's software **vertex** pipeline: 120 k
+extruded hexagon prisms is ~4.3 M vertices, and shrinking the viewport cuts *fill* cost,
+not *vertex* cost — which is exactly why the smaller canvas did not help. There is no
+analogue of this on a real GPU. Absolute browser stall numbers from this environment are
+therefore not evidence about the deployed experience in either direction; the JS table
+above is the number that transfers.
 - **One genuine functional delta at the 4.5 crossing:** the baseline ended on `mid`
   (15,412 cells); HEAD reaches **r8** (94,864 cells).
 
