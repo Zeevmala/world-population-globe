@@ -1,22 +1,20 @@
 import { useEffect, useRef } from 'react'
 import { BASE } from './load'
-import { readColumns } from './parquet'
+import { decodeTable } from './decodeClient'
+import { concatPacked, h3Column } from './h3Column'
 import { prefetchParents, visibleParents, viewKey } from '../lib/tiles'
 import { useGlobeStore } from '../store/useGlobeStore'
 import type { LodData, TileIndex } from '../types'
 
+/** A cached tile's columns. `h3` stays packed so merging is a typed-array copy. */
 interface TileCols {
-  h3: string[]
+  h3: BigUint64Array
   population: Float32Array
   lng: Float32Array
   lat: Float32Array
 }
 
 const TILE_CACHE_MAX = 64
-
-function toF32(col: ArrayLike<unknown>): Float32Array {
-  return col instanceof Float32Array ? col : Float32Array.from(col as ArrayLike<number>)
-}
 
 /** Run `cb` when the main thread is idle; falls back to a short timer. */
 function onIdle(cb: () => void): number {
@@ -67,12 +65,14 @@ async function ensureTile(
   if (!job) {
     const file = idx.tiles.find((t) => t.parent === p)!.file
     job = (async () => {
-      const cols = await readColumns(`${BASE}${file}`, ['h3', 'population', 'lng', 'lat'])
+      // Decoded in a worker: a burst of tile parses during a pan used to land on the
+      // main thread, one stutter per tile.
+      const cols = await decodeTable(`${BASE}${file}`)
       return {
-        h3: Array.from(cols.h3 as ArrayLike<string>),
-        population: toF32(cols.population),
-        lng: toF32(cols.lng),
-        lat: toF32(cols.lat),
+        h3: cols.h3.packed,
+        population: cols.population,
+        lng: cols.lng,
+        lat: cols.lat,
       }
     })()
     inflight.set(p, job)
@@ -89,21 +89,30 @@ async function ensureTile(
 function mergeTiles(parents: string[], cache: Map<string, TileCols>, idx: TileIndex): LodData {
   let total = 0
   for (const p of parents) total += cache.get(p)!.population.length
-  const h3 = new Array<string>(total)
   const population = new Float32Array(total)
   const lng = new Float32Array(total)
   const lat = new Float32Array(total)
   let off = 0
   for (const p of parents) {
     const t = cache.get(p)!
-    const n = t.population.length
-    for (let i = 0; i < n; i++) h3[off + i] = t.h3[i]
     population.set(t.population, off)
     lng.set(t.lng, off)
     lat.set(t.lat, off)
-    off += n
+    off += t.population.length
   }
-  return { lod: 'r8', h3Res: idx.h3Res, approxKm: idx.approxKm, h3, population, lng, lat, maxPopulation: idx.maxPopulation }
+  // Every column is now a typed-array `set()` — the old merge copied H3 strings
+  // one at a time, on the main thread, on every view-key change.
+  const h3 = h3Column(concatPacked(parents.map((p) => cache.get(p)!.h3), total))
+  return {
+    lod: 'r8',
+    h3Res: idx.h3Res,
+    approxKm: idx.approxKm,
+    h3,
+    population,
+    lng,
+    lat,
+    maxPopulation: idx.maxPopulation,
+  }
 }
 
 /**

@@ -1,4 +1,5 @@
 /** Shared domain types for the population globe. */
+import type { H3Column } from './data/h3Column'
 
 /** One level-of-detail entry as published in `public/data/manifest.json`. */
 export interface LodEntry {
@@ -52,12 +53,14 @@ export interface Manifest {
 /**
  * Columnar in-memory representation of one LOD tier. Typed arrays (not row
  * objects) keep 2M-cell tiers light and let deck.gl accessors index directly.
+ * The index column is packed 64-bit ({@link H3Column}), with strings built only
+ * for the cells that reach a `getHexagon` call.
  */
 export interface LodData {
   lod: string
   h3Res: number
   approxKm: number
-  h3: string[]
+  h3: H3Column
   population: Float32Array
   lng: Float32Array
   lat: Float32Array
@@ -71,6 +74,10 @@ export interface HoverInfo {
   lng: number
   lat: number
   approxKm: number
+  /** Nominal area of a cell at this resolution (km²) — see `lib/density.ts`. */
+  areaKm2: number
+  /** People per km², the quantity the color ramp and column height encode. */
+  density: number
 }
 
 /** GlobeView camera state (longitude/latitude/zoom, plus optional extras). */

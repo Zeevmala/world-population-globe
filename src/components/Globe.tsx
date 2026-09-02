@@ -63,7 +63,8 @@ export function Globe() {
     return () => cancelAnimationFrame(raf)
   }, [autoRotate, rotateBy])
 
-  // Animated fly-to: ease the camera from the current view to `flyTarget` over ~1.6 s.
+  // Animated fly-to: ease the camera from the current view to `flyTarget` over the
+  // target's duration (~1.6 s for a search flight, ~0.4 s for a zoom nudge).
   // A manual rAF tween (like auto-rotate above) is used instead of deck's
   // FlyToInterpolator, which assumes Web Mercator and misbehaves on GlobeView. Under
   // reduced-motion we jump straight to the target instead of tweening.
@@ -75,21 +76,27 @@ export function Globe() {
     let dLng = flyTarget.longitude - startLng
     dLng -= 360 * Math.round(dLng / 360) // shortest way around the globe
 
+    const startLat = start.latitude
+    const startZoom = start.zoom
+    const dLat = flyTarget.latitude - startLat
+    const dZoom = flyTarget.zoom - startZoom
+    // A zoom nudge (+/- button, keyboard) targets the current lng/lat, so it must not
+    // write them back each frame — that would freeze the idle spin for the tween's
+    // duration and fight the rotation rAF for the camera.
+    const moving = dLng !== 0 || dLat !== 0
+
     if (reducedMotion) {
+      const live = useGlobeStore.getState().viewState
       setViewState({
-        ...useGlobeStore.getState().viewState,
-        longitude: wrapLng(flyTarget.longitude),
-        latitude: flyTarget.latitude,
+        ...live,
+        longitude: moving ? wrapLng(flyTarget.longitude) : live.longitude,
+        latitude: moving ? flyTarget.latitude : live.latitude,
         zoom: flyTarget.zoom,
       })
       return
     }
 
-    const startLat = start.latitude
-    const startZoom = start.zoom
-    const dLat = flyTarget.latitude - startLat
-    const dZoom = flyTarget.zoom - startZoom
-    const DURATION = 1600
+    const DURATION = flyTarget.durationMs ?? 1600
     const ease = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2)
 
     let raf = 0
@@ -102,10 +109,11 @@ export function Globe() {
       }
       const t = Math.min(1, (now - t0) / DURATION)
       const e = ease(t)
+      const live = useGlobeStore.getState().viewState
       setViewState({
-        ...useGlobeStore.getState().viewState,
-        longitude: wrapLng(startLng + dLng * e),
-        latitude: startLat + dLat * e,
+        ...live,
+        longitude: moving ? wrapLng(startLng + dLng * e) : live.longitude,
+        latitude: moving ? startLat + dLat * e : live.latitude,
         zoom: startZoom + dZoom * e,
       })
       if (t < 1) raf = requestAnimationFrame(tick)

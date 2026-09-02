@@ -13,6 +13,8 @@ body {
   font-family: ui-sans-serif, system-ui, "Segoe UI", Rubik, "Noto Sans", sans-serif;
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
+  /* The globe owns every gesture; never rubber-band the page behind it. */
+  overscroll-behavior: none;
 }
 
 canvas {
@@ -29,7 +31,128 @@ canvas:focus-visible {
   outline: none;
 }
 
-/* Star twinkle — only for users who haven't asked for reduced motion. */
+/*
+ * HUD surface language — one glass recipe, declared once in the `components` layer so
+ * Tailwind utilities (which live in the later `utilities` layer) can still override any
+ * single property at the call site. Data > labels > basemap: these surfaces are dark,
+ * low-chroma and translucent so nothing competes with the Inferno ramp.
+ */
+@layer components {
+  .hud-panel {
+    border-radius: 0.5rem;
+    border: 1px solid rgb(255 255 255 / 0.1);
+    background: rgb(0 0 0 / 0.4);
+    box-shadow: 0 8px 24px -14px rgb(0 0 0 / 0.9);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+  }
+
+  /* Square icon button. 44 px on phones (touch target floor), 36 px from `sm` up. */
+  .hud-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 2.75rem;
+    width: 2.75rem;
+    flex: none;
+    color: rgb(255 255 255 / 0.85);
+    border-radius: 0.5rem;
+    transition:
+      background-color 150ms ease,
+      color 150ms ease;
+  }
+  .hud-btn:hover {
+    background: rgb(255 255 255 / 0.1);
+    color: #fff;
+  }
+  .hud-btn:active {
+    background: rgb(255 255 255 / 0.16);
+  }
+  .hud-btn[aria-pressed="true"] {
+    color: #ffd9a8; /* warm accent, borrowed from the ramp's upper half */
+  }
+  @media (min-width: 40rem) {
+    .hud-btn {
+      height: 2.25rem;
+      width: 2.25rem;
+    }
+  }
+
+  /* Keycap chip used in tooltips and the shortcuts dialog. */
+  .hud-kbd {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.35rem;
+    padding: 0.05rem 0.3rem;
+    border: 1px solid rgb(255 255 255 / 0.18);
+    border-radius: 0.3rem;
+    background: rgb(255 255 255 / 0.06);
+    font-size: 10px;
+    line-height: 1.4;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: rgb(255 255 255 / 0.85);
+  }
+
+  /* Hover/focus tooltip for the icon rail (desktop only — see `sm:` gate at call site). */
+  .hud-tip {
+    position: absolute;
+    right: 100%;
+    top: 50%;
+    transform: translateY(-50%);
+    margin-right: 0.5rem;
+    display: none;
+    align-items: center;
+    gap: 0.375rem;
+    white-space: nowrap;
+    border-radius: 0.375rem;
+    border: 1px solid rgb(255 255 255 / 0.1);
+    background: rgb(0 0 0 / 0.82);
+    padding: 0.25rem 0.5rem;
+    font-size: 11px;
+    color: rgb(255 255 255 / 0.9);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 120ms ease;
+    backdrop-filter: blur(8px);
+  }
+  @media (min-width: 40rem) {
+    .hud-tip {
+      display: inline-flex;
+    }
+    .group:hover > .hud-tip,
+    .group:focus-visible > .hud-tip {
+      opacity: 1;
+    }
+  }
+
+  /* Indeterminate progress bar: honest "something is in flight", no fake percentage. */
+  .hud-bar {
+    position: relative;
+    overflow: hidden;
+    height: 2px;
+    border-radius: 999px;
+    background: rgb(255 255 255 / 0.12);
+  }
+  .hud-bar::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    width: 40%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, rgba(255, 190, 120, 0), #ffb26b, rgba(255, 190, 120, 0));
+  }
+
+  /* Vertical zoom slider: transparent, sits over the painted ladder and carries the
+     native keyboard + drag semantics (and the accessible name) for it. */
+  .hud-vrange {
+    writing-mode: vertical-lr;
+    direction: rtl; /* max at the top, like every zoom slider */
+    accent-color: #ffb26b;
+  }
+}
+
+/* Motion is opt-out: every animation below is gated on the OS preference. */
 @media (prefers-reduced-motion: no-preference) {
   @keyframes star-twinkle {
     0%,
@@ -42,5 +165,51 @@ canvas:focus-visible {
   }
   .star-tw {
     animation: star-twinkle 4s ease-in-out infinite;
+  }
+
+  @keyframes hud-rise {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  .hud-rise {
+    animation: hud-rise 0.32s cubic-bezier(0.2, 0.7, 0.3, 1) both;
+  }
+
+  @keyframes hud-fade {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+  .hud-fade {
+    animation: hud-fade 0.22s ease-out both;
+  }
+
+  @keyframes hud-sweep {
+    from {
+      transform: translateX(-100%);
+    }
+    to {
+      transform: translateX(250%);
+    }
+  }
+  .hud-bar::after {
+    animation: hud-sweep 1.35s ease-in-out infinite;
+  }
+}
+
+/* Reduced motion: the bar still reads as active, it just doesn't travel. */
+@media (prefers-reduced-motion: reduce) {
+  .hud-bar::after {
+    width: 100%;
+    opacity: 0.5;
   }
 }

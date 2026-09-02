@@ -6,7 +6,9 @@ import tseslint from 'typescript-eslint'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(['dist']),
+  // `.claude/worktrees/*` holds throwaway checkouts of this same repo; each carries its
+  // own tsconfig, which makes the type-aware parser refuse to guess a root directory.
+  globalIgnores(['dist', '.claude/**', '**/scripts/qa/out/**']),
   {
     files: ['**/*.{ts,tsx}'],
     extends: [
@@ -17,6 +19,8 @@ export default defineConfig([
     ],
     languageOptions: {
       globals: globals.browser,
+      // Pin the root explicitly so a nested checkout can never make it ambiguous.
+      parserOptions: { tsconfigRootDir: import.meta.dirname },
     },
   },
 ])

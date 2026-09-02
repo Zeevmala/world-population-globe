@@ -80,13 +80,17 @@ src/
   layers/useGlobeLayers # sphere (SimpleMeshLayer) + land (GeoJsonLayer) + population (H3HexagonLayer)
   data/
     load.ts             # manifest + LOD loaders → columnar typed arrays
-    parquet.ts          # hyparquet column reader (subpath import)
+    decode.worker.ts    # off-thread fetch + Parquet decode → transferable typed arrays
+    decodeClient.ts     # 2-worker pool, request routing, inline fallback
+    h3Column.ts         # packed BigUint64 H3 indices + lazy string materialization
+    parquet.ts          # hyparquet column reader (subpath import; inline-fallback path)
     useGlobeData.ts     # eager overview + lazy mid by zoom band
     useTileStreaming.ts # r8 viewport tile fetch + LRU cache + merge + idle ring prefetch
   lib/
-    lod.ts              # pickLod() + selectActive() + cullForView() viewport cull + quickselect cap
+    density.ts          # cell area per H3 res, people/km², shared cross-tier domain
+    lod.ts              # pickLod() + selectActive() + hysteresis + cullForView() + quickselect cap
     tiles.ts            # visibleParents() + prefetchParents() (h3-js gridDisk) + coarse view key
-    scales.ts           # log1p normalization, elevation/earth constants
+    scales.ts           # zoom-continuous column height + earth constants
     colorRamp.ts        # Inferno ramp (RGB + CSS)
     format.ts           # population / lat-lng formatting
   store/useGlobeStore   # Zustand: manifest, data, viewState, hover, autoRotate, status
@@ -94,8 +98,30 @@ src/
 
 ### Rendering & cartographic rules
 
-- **Encoding** — population is right-skewed, so **both** column height and Inferno color use
-  `log1p` normalization. Linear would collapse all but megacities into one bucket.
+- **Encoding — density, not per-cell population.** Both column height and Inferno color are
+  `log1p` of **people/km²**, normalized against **one domain shared by every tier**
+  (`lib/density.ts` → the densest cell any tier publishes, derived from the manifest).
+  This replaced per-tier `log1p(population)/log1p(maxPopulation_of_that_tier)`, which was
+  wrong twice over: an r4 cell covers 1,770 km² and an r8 cell 0.74 km² — 2,400× — so the
+  same place rendered a different color on each side of a zoom threshold, and the legend's
+  "density" label described a quantity the map wasn't drawing. Density is the only quantity
+  comparable across resolutions, so it is the one that gets encoded, and the legend now
+  prints real people/km² tick values at their true log positions.
+  - Cell area is the **nominal average for the resolution**, not per-cell. Real H3 cells
+    vary ~±25% around it, which moves a cell <1% along the log ramp; an exact `cellArea()`
+    per cell costs ~3.6 µs (≈7 s for the 2 M-cell mid tier), which no budget absorbs. The
+    UI says "≈" wherever it surfaces a number derived from it.
+- **Column height is continuous in zoom, not stepped per tier.** `maxColumnHeightM(zoom)`
+  (`lib/scales.ts`) = `min(800 km, 2.9e6 m · 2^(-1.425·zoom))`, calibrated on the two views
+  that ship: the zoom-1.3 hero (800 km columns) and city zoom ≈5.5 (13 km). Height used to
+  be `approxKm × 32,000` — a per-tier constant — so crossing a threshold collapsed every
+  column ~7× in one frame, the most visible seam in the render. Now both tiers agree on the
+  height at the crossing, and the switch changes only mesh resolution. It rides deck.gl's
+  `elevationScale` uniform (with `getElevation` returning normalized 0–1 density), so a zoom
+  change costs one uniform write — no attribute re-upload, no re-cull.
+- **Tier hysteresis** — a tier keeps a 0.15-zoom band once on screen (`lib/lod.ts`), so a
+  camera resting on 2.2 or 4.5 can't oscillate and rebuild the layer every frame. The
+  rendered tier is published to the store as `activeLod` and fed back in.
 - **Color** — Inferno (perceptually uniform). Rainbow/jet is banned (fabricates breaks).
 - **Performance budget**
   - overview (71 k): rendered whole.
@@ -104,6 +130,18 @@ src/
   - r8 (33 M total): only the visible r3 tiles are fetched, merged, then viewport-culled + capped
     at 120 k/frame — so render cost is bounded regardless of global cell count.
   - Data is **columnar typed arrays** + deck.gl non-iterable `{length}` accessors → no per-cell objects.
+  - **Decoding runs in a worker** (`data/decode.worker.ts`, 2-worker pool). Measured on the
+    committed data, the mid tier costs **2.44 s** of pure decode (metadata 4 ms · population
+    296 ms · lng 163 ms · lat 164 ms · **h3 1,817 ms**) — and it used to run on the main
+    thread the instant the camera crossed zoom 2.2, freezing the app mid-gesture. The worker
+    fetches and decodes, then **transfers** the buffers, so the main thread pays a postMessage.
+  - **H3 indices travel packed.** An H3 index is a 64-bit integer whose canonical string is
+    its lowercase hex — always 15 digits (mode-1 sets bit 59). So the column is a
+    `BigUint64Array` (transferable, 16 MB for the mid tier vs ~80 MB of JS strings) and the
+    string is built only for cells that reach `getHexagon`, bounded by the 120 k render cap
+    and memoized per cell. Verified: 2,090,083 real indices across r4/r6/r8 round-trip
+    `BigInt('0x'+s).toString(16) === s` with **0 mismatches**, all exactly 15 hex chars.
+    The r8 tile merge is now a typed-array `set()` instead of a per-cell string copy.
 - **Globe** — dark ocean sphere (`SimpleMeshLayer`, CARTESIAN) + Natural Earth 110 m land
   outline; ambient + directional lighting so columns read as 3D while keeping ramp colors true.
 - **Interaction performance** (panning was the user-felt cost — most of it was paid *per

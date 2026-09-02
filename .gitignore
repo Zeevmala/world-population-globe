@@ -33,3 +33,7 @@ pipeline/.cache/
 # Python
 __pycache__/
 *.pyc
+
+# Throwaway worktrees (parallel-agent checkouts) and headless-QA artifacts
+.claude/worktrees/
+scripts/qa/out/

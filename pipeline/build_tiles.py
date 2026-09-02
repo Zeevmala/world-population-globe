@@ -12,8 +12,8 @@ vectorized DuckDB pass (no Python row loops). Shared helpers: ``kontur_common``.
 Usage::
 
     python pipeline/build_tiles.py --measure-only     # just count r8 cells
-    python pipeline/build_tiles.py                     # build tiles (r2 parents)
-    python pipeline/build_tiles.py --tile-parent-res 3
+    python pipeline/build_tiles.py                     # build tiles (r3 parents — what ships)
+    python pipeline/build_tiles.py --tile-parent-res 4 # finer split, more files
 """
 from __future__ import annotations
 
@@ -52,7 +52,9 @@ TILES_DIR = OUT / "tiles" / "r8"
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Build the r8 population tile pyramid.")
-    ap.add_argument("--tile-parent-res", type=int, default=2, help="H3 parent res for tiling")
+    # r3 is the shipped pyramid (12,761 tiles, 0.27 MB max). r2 was rejected — single
+    # tiles reach tens of MB, which is under the 95 MB guard and so fails silently.
+    ap.add_argument("--tile-parent-res", type=int, default=3, help="H3 parent res for tiling")
     ap.add_argument("--measure-only", action="store_true", help="count cells and exit")
     args = ap.parse_args()
     pres = args.tile_parent_res

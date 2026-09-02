@@ -1,0 +1,1894 @@
+{
+  "schema": "render-qa/1",
+  "generatedAt": "2026-08-28T22:19:53.604Z",
+  "durationMs": 726084,
+  "target": {
+    "url": "http://127.0.0.1:5199/",
+    "mode": "vite dev server (root /home/user/world-population-globe/.claude/worktrees/qa-baseline)",
+    "root": "/home/user/world-population-globe/.claude/worktrees/qa-baseline",
+    "commit": "f5fc6cdc",
+    "dirty": false,
+    "attachedToExistingServer": true,
+    "servedRootVerified": true,
+    "servedRootCheck": {
+      "match": true,
+      "files": [
+        {
+          "file": "src/store/useGlobeStore.ts",
+          "ok": true,
+          "diskToServed": 0.938,
+          "servedToDisk": 0.938
+        },
+        {
+          "file": "src/lib/lod.ts",
+          "ok": true,
+          "diskToServed": 1,
+          "servedToDisk": 0.958
+        },
+        {
+          "file": "src/layers/useGlobeLayers.ts",
+          "ok": true,
+          "diskToServed": 1,
+          "servedToDisk": 0.929
+        }
+      ]
+    },
+    "driveable": true
+  },
+  "browser": {
+    "executable": "/opt/pw-browsers/chromium-1194/chrome-linux/chrome",
+    "version": "141.0.7390.37",
+    "flags": [
+      "--use-gl=angle",
+      "--use-angle=swiftshader",
+      "--enable-unsafe-swiftshader",
+      "--disable-gpu-sandbox",
+      "--no-sandbox",
+      "--ignore-gpu-blocklist",
+      "--disable-background-networking",
+      "--disable-component-update",
+      "--disable-sync",
+      "--disable-default-apps",
+      "--no-first-run",
+      "--mute-audio",
+      "--disable-features=Translate,OptimizationHints,MediaRouter,AutofillServerCommunication,OptimizationGuideModelDownloading"
+    ]
+  },
+  "viewport": {
+    "width": 900,
+    "height": 560,
+    "deviceScaleFactor": 1
+  },
+  "host": {
+    "cpus": 4,
+    "cpuModel": "Intel(R) Xeon(R) Processor @ 2.10GHz",
+    "loadStart": [
+      7.08,
+      7.88,
+      7.54
+    ],
+    "loadEnd": [
+      9.38,
+      8.88,
+      8.4
+    ]
+  },
+  "config": {
+    "quick": false,
+    "animFrames": 24,
+    "animMaxMs": 1200,
+    "settleTimeoutMs": 60000,
+    "maxStallMs": 0,
+    "maxRenderedCells": 120000
+  },
+  "webgl": {
+    "preflight": {
+      "ok": true,
+      "version": "WebGL 2.0 (OpenGL ES 3.0 Chromium)",
+      "shadingLanguage": "WebGL GLSL ES 3.00 (OpenGL ES GLSL ES 3.0 Chromium)",
+      "vendor": "Google Inc. (Google)",
+      "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+      "maxTextureSize": 8192,
+      "clearedPixel": [
+        51,
+        102,
+        204,
+        255
+      ],
+      "expectedPixel": [
+        51,
+        102,
+        204,
+        255
+      ]
+    },
+    "inApp": {
+      "ok": true,
+      "contextLost": false,
+      "contextType": "WebGL2RenderingContext",
+      "deviceType": "webgl",
+      "gpu": "software",
+      "version": "WebGL 2.0 (OpenGL ES 3.0 Chromium)",
+      "vendor": "Google Inc. (Google)",
+      "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+      "drawingBufferWidth": 900,
+      "drawingBufferHeight": 560
+    },
+    "readback": {
+      "ok": true,
+      "width": 900,
+      "height": 560,
+      "samples": 13622,
+      "mean": 13.16,
+      "stdev": 36.06,
+      "distinctColors": 713,
+      "redrawError": null
+    },
+    "final": {
+      "ok": true,
+      "contextLost": false,
+      "contextType": "WebGL2RenderingContext",
+      "deviceType": "webgl",
+      "gpu": "software",
+      "version": "WebGL 2.0 (OpenGL ES 3.0 Chromium)",
+      "vendor": "Google Inc. (Google)",
+      "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+      "drawingBufferWidth": 900,
+      "drawingBufferHeight": 560
+    }
+  },
+  "boot": {
+    "ms": 8144,
+    "longtaskSupported": true,
+    "longtasks": [
+      {
+        "start": 148,
+        "duration": 51,
+        "name": "self",
+        "container": "window"
+      },
+      {
+        "start": 500,
+        "duration": 3207,
+        "name": "self",
+        "container": "window"
+      },
+      {
+        "start": 3708,
+        "duration": 473,
+        "name": "self",
+        "container": "window"
+      },
+      {
+        "start": 4190,
+        "duration": 632,
+        "name": "self",
+        "container": "window"
+      },
+      {
+        "start": 4843,
+        "duration": 151,
+        "name": "self",
+        "container": "window"
+      },
+      {
+        "start": 4995,
+        "duration": 3121,
+        "name": "self",
+        "container": "window"
+      }
+    ]
+  },
+  "limitations": [
+    "Rendering runs on SwiftShader (ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)), a CPU rasterizer — absolute FPS is NOT comparable to a real GPU. Use these numbers two ways only: relative (run vs baseline on the same machine) and stall detection (a 500 ms+ frame is a freeze on any hardware).",
+    "Frame deltas come from in-page requestAnimationFrame timestamps; the wall-clock cap on an animation can only be checked between frames, so a single multi-second frame overshoots it. `animElapsedMs` records the truth.",
+    "p50/p95 with fewer than 10 frames are flagged `lowConfidence` — at deep zoom a single frame can exceed the whole animation budget, so there is little to take percentiles of.",
+    "Long tasks come from PerformanceObserver `longtask`, which reports duration but attributes work only coarsely; a stall is located in time, not blamed on a specific call stack.",
+    "Measured on a 4-CPU box at load average 7.08 — CPU contention from anything else running inflates every timing here. Compare runs taken under similar load, and treat the load figures in the report as part of the result.",
+    "deck.gl coalesces redraws, so a camera write does not render on the next animation frame. Raw rAF percentiles therefore include idle ticks; the `redraw` series (ticks where deck.gl's Redraw Count advanced) is the cost of an actual rendered frame.",
+    "The dev server is unminified and unbundled (Vite serves ES modules) and the data is uncompressed on localhost, so load-side timings are not the deployed experience — `npm run verify:live` covers the CDN path."
+  ],
+  "samples": [
+    {
+      "id": "tokyo@z0.50",
+      "region": "tokyo",
+      "regionLabel": "Tokyo",
+      "density": "dense",
+      "longitude": 139.7,
+      "latitude": 35.68,
+      "zoom": 0.5,
+      "expectedTier": "overview",
+      "tier": "overview",
+      "tierCells": 71283,
+      "renderedCells": 71283,
+      "capExceeded": false,
+      "loadedLods": [
+        "overview"
+      ],
+      "settle": {
+        "ms": 7451,
+        "tierReached": true,
+        "quiet": false,
+        "worstStallMs": 7412,
+        "longtasks": []
+      },
+      "frame": {
+        "frames": 3,
+        "p50": 33.4,
+        "p95": 5658.04,
+        "max": 6283,
+        "min": 9.4,
+        "estFps": 29.9,
+        "lowConfidence": true,
+        "redrawCounter": true,
+        "redrawFrames": 2,
+        "redrawIntervalMs": 3171,
+        "redraw": {
+          "frames": 2,
+          "p50": 3158.2,
+          "p95": 5970.52,
+          "max": 6283,
+          "min": 33.4,
+          "estFps": 0.3,
+          "lowConfidence": true
+        }
+      },
+      "worstStallMs": 6283,
+      "longtasks": [],
+      "animElapsedMs": 6342,
+      "deckMetrics": {
+        "fps": 0,
+        "framesRedrawn": 1,
+        "gpuTime": 0,
+        "cpuTime": 0
+      },
+      "screenshot": {
+        "path": "scripts/qa/out/tokyo-z0.50.png",
+        "ok": true,
+        "width": 900,
+        "height": 560,
+        "samples": 72000,
+        "mean": 18.44,
+        "stdev": 30.59,
+        "min": 1,
+        "max": 255,
+        "distinctColors": 1158
+      },
+      "consoleErrors": [],
+      "pageErrors": [],
+      "newErrors": 0
+    },
+    {
+      "id": "tokyo@z1.30",
+      "region": "tokyo",
+      "regionLabel": "Tokyo",
+      "density": "dense",
+      "longitude": 139.7,
+      "latitude": 35.68,
+      "zoom": 1.3,
+      "expectedTier": "overview",
+      "tier": "overview",
+      "tierCells": 71283,
+      "renderedCells": 71283,
+      "capExceeded": false,
+      "loadedLods": [
+        "overview"
+      ],
+      "settle": {
+        "ms": 6207,
+        "tierReached": true,
+        "quiet": false,
+        "worstStallMs": 6183,
+        "longtasks": []
+      },
+      "frame": {
+        "frames": 3,
+        "p50": 16.7,
+        "p95": 6061.46,
+        "max": 6733.1,
+        "min": -1.6,
+        "estFps": 59.9,
+        "lowConfidence": true,
+        "redrawCounter": true,
+        "redrawFrames": 2,
+        "redrawIntervalMs": 3379,
+        "redraw": {
+          "frames": 2,
+          "p50": 3374.9,
+          "p95": 6397.28,
+          "max": 6733.1,
+          "min": 16.7,
+          "estFps": 0.3,
+          "lowConfidence": true
+        }
+      },
+      "worstStallMs": 6733,
+      "longtasks": [],
+      "animElapsedMs": 6759,
+      "deckMetrics": {
+        "fps": 0,
+        "framesRedrawn": 1,
+        "gpuTime": 0,
+        "cpuTime": 0
+      },
+      "screenshot": {
+        "path": "scripts/qa/out/tokyo-z1.30.png",
+        "ok": true,
+        "width": 900,
+        "height": 560,
+        "samples": 72000,
+        "mean": 29.28,
+        "stdev": 40.75,
+        "min": 1,
+        "max": 255,
+        "distinctColors": 1533
+      },
+      "consoleErrors": [],
+      "pageErrors": [],
+      "newErrors": 0
+    },
+    {
+      "id": "tokyo@z2.00",
+      "region": "tokyo",
+      "regionLabel": "Tokyo",
+      "density": "dense",
+      "longitude": 139.7,
+      "latitude": 35.68,
+      "zoom": 2,
+      "expectedTier": "overview",
+      "tier": "overview",
+      "tierCells": 71283,
+      "renderedCells": 71283,
+      "capExceeded": false,
+      "loadedLods": [
+        "overview"
+      ],
+      "settle": {
+        "ms": 7569,
+        "tierReached": true,
+        "quiet": false,
+        "worstStallMs": 7545,
+        "longtasks": []
+      },
+      "frame": {
+        "frames": 3,
+        "p50": 33.4,
+        "p95": 6752.98,
+        "max": 7499.6,
+        "min": 3.1,
+        "estFps": 29.9,
+        "lowConfidence": true,
+        "redrawCounter": true,
+        "redrawFrames": 2,
+        "redrawIntervalMs": 3773,
+        "redraw": {
+          "frames": 2,
+          "p50": 3766.5,
+          "p95": 7126.29,
+          "max": 7499.6,
+          "min": 33.4,
+          "estFps": 0.3,
+          "lowConfidence": true
+        }
+      },
+      "worstStallMs": 7500,
+      "longtasks": [],
+      "animElapsedMs": 7546,
+      "deckMetrics": {
+        "fps": 0,
+        "framesRedrawn": 1,
+        "gpuTime": 0,
+        "cpuTime": 0
+      },
+      "screenshot": {
+        "path": "scripts/qa/out/tokyo-z2.00.png",
+        "ok": true,
+        "width": 900,
+        "height": 560,
+        "samples": 72000,
+        "mean": 43.5,
+        "stdev": 51.77,
+        "min": 2,
+        "max": 255,
+        "distinctColors": 1905
+      },
+      "consoleErrors": [],
+      "pageErrors": [],
+      "newErrors": 0
+    },
+    {
+      "id": "tokyo@z2.30",
+      "region": "tokyo",
+      "regionLabel": "Tokyo",
+      "density": "dense",
+      "longitude": 139.7,
+      "latitude": 35.68,
+      "zoom": 2.3,
+      "expectedTier": "mid",
+      "tier": "mid",
+      "tierCells": 2016971,
+      "renderedCells": 120000,
+      "capExceeded": false,
+      "loadedLods": [
+        "overview",
+        "mid"
+      ],
+      "settle": {
+        "ms": 23339,
+        "tierReached": true,
+        "quiet": false,
+        "worstStallMs": 12316,
+        "longtasks": [
+          {
+            "start": 234977,
+            "duration": 53,
+            "name": "self",
+            "container": "window"
+          },
+          {
+            "start": 235031,
+            "duration": 10896,
+            "name": "self",
+            "container": "window"
+          }
+        ]
+      },
+      "frame": {
+        "frames": 3,
+        "p50": 16.6,
+        "p95": 10981.3,
+        "max": 12199.6,
+        "min": 8.1,
+        "estFps": 60.2,
+        "lowConfidence": true,
+        "redrawCounter": true,
+        "redrawFrames": 2,
+        "redrawIntervalMs": 6115,
+        "redraw": {
+          "frames": 2,
+          "p50": 6108.1,
+          "p95": 11590.45,
+          "max": 12199.6,
+          "min": 16.6,
+          "estFps": 0.2,
+          "lowConfidence": true
+        }
+      },
+      "worstStallMs": 12200,
+      "longtasks": [],
+      "animElapsedMs": 12231,
+      "deckMetrics": {
+        "fps": 0.25638808290808357,
+        "framesRedrawn": 33,
+        "gpuTime": 0,
+        "cpuTime": 62832.599999998696
+      },
+      "screenshot": {
+        "path": "scripts/qa/out/tokyo-z2.30.png",
+        "ok": true,
+        "width": 900,
+        "height": 560,
+        "samples": 72000,
+        "mean": 23.94,
+        "stdev": 32.89,
+        "min": 1,
+        "max": 255,
+        "distinctColors": 980
+      },
+      "consoleErrors": [],
+      "pageErrors": [],
+      "newErrors": 0
+    },
+    {
+      "id": "tokyo@z3.00",
+      "region": "tokyo",
+      "regionLabel": "Tokyo",
+      "density": "dense",
+      "longitude": 139.7,
+      "latitude": 35.68,
+      "zoom": 3,
+      "expectedTier": "mid",
+      "tier": "mid",
+      "tierCells": 2016971,
+      "renderedCells": 120000,
+      "capExceeded": false,
+      "loadedLods": [
+        "overview",
+        "mid"
+      ],
+      "settle": {
+        "ms": 36937,
+        "tierReached": true,
+        "quiet": false,
+        "worstStallMs": 12298,
+        "longtasks": []
+      },
+      "frame": {
+        "frames": 3,
+        "p50": 33.3,
+        "p95": 11117.88,
+        "max": 12349.5,
+        "min": -6.5,
+        "estFps": 30,
+        "lowConfidence": true,
+        "redrawCounter": true,
+        "redrawFrames": 2,
+        "redrawIntervalMs": 6198,
+        "redraw": {
+          "frames": 2,
+          "p50": 6191.4,
+          "p95": 11733.69,
+          "max": 12349.5,
+          "min": 33.3,
+          "estFps": 0.2,
+          "lowConfidence": true
+        }
+      },
+      "worstStallMs": 12350,
+      "longtasks": [],
+      "animElapsedMs": 12397,
+      "deckMetrics": {
+        "fps": 0.25638808290808357,
+        "framesRedrawn": 33,
+        "gpuTime": 0,
+        "cpuTime": 62832.599999998696
+      },
+      "screenshot": {
+        "path": "scripts/qa/out/tokyo-z3.00.png",
+        "ok": true,
+        "width": 900,
+        "height": 560,
+        "samples": 72000,
+        "mean": 32.74,
+        "stdev": 36.29,
+        "min": 1,
+        "max": 255,
+        "distinctColors": 1382
+      },
+      "consoleErrors": [],
+      "pageErrors": [],
+      "newErrors": 0
+    },
+    {
+      "id": "tokyo@z4.00",
+      "region": "tokyo",
+      "regionLabel": "Tokyo",
+      "density": "dense",
+      "longitude": 139.7,
+      "latitude": 35.68,
+      "zoom": 4,
+      "expectedTier": "mid",
+      "tier": "mid",
+      "tierCells": 2016971,
+      "renderedCells": 44816,
+      "capExceeded": false,
+      "loadedLods": [
+        "overview",
+        "mid"
+      ],
+      "settle": {
+        "ms": 35008,
+        "tierReached": true,
+        "quiet": false,
+        "worstStallMs": 22371,
+        "longtasks": [
+          {
+            "start": 332897,
+            "duration": 54,
+            "name": "self",
+            "container": "window"
+          },
+          {
+            "start": 345245,
+            "duration": 22371,
+            "name": "self",
+            "container": "window"
+          }
+        ]
+      },
+      "frame": {
+        "frames": 4,
+        "p50": 75.05,
+        "p95": 7567.97,
+        "max": 8882.9,
+        "min": -5.7,
+        "estFps": 13.3,
+        "lowConfidence": true,
+        "redrawCounter": true,
+        "redrawFrames": 3,
+        "redrawIntervalMs": 3014,
+        "redraw": {
+          "frames": 3,
+          "p50": 116.7,
+          "p95": 8006.28,
+          "max": 8882.9,
+          "min": 33.4,
+          "estFps": 8.6,
+          "lowConfidence": true
+        }
+      },
+      "worstStallMs": 8883,
+      "longtasks": [],
+      "animElapsedMs": 9041,
+      "deckMetrics": {
+        "fps": 0.25638808290808357,
+        "framesRedrawn": 33,
+        "gpuTime": 0,
+        "cpuTime": 62832.599999998696
+      },
+      "screenshot": {
+        "path": "scripts/qa/out/tokyo-z4.00.png",
+        "ok": true,
+        "width": 900,
+        "height": 560,
+        "samples": 72000,
+        "mean": 36.47,
+        "stdev": 32.44,
+        "min": 1.08,
+        "max": 255,
+        "distinctColors": 1809
+      },
+      "consoleErrors": [],
+      "pageErrors": [],
+      "newErrors": 0
+    },
+    {
+      "id": "tokyo@z4.60",
+      "region": "tokyo",
+      "regionLabel": "Tokyo",
+      "density": "dense",
+      "longitude": 139.7,
+      "latitude": 35.68,
+      "zoom": 4.6,
+      "expectedTier": "r8",
+      "tier": "r8",
+      "tierCells": 94864,
+      "renderedCells": 94864,
+      "capExceeded": false,
+      "loadedLods": [
+        "overview",
+        "mid"
+      ],
+      "settle": {
+        "ms": 6959,
+        "tierReached": true,
+        "quiet": false,
+        "worstStallMs": 2578,
+        "longtasks": [
+          {
+            "start": 424194,
+            "duration": 2211,
+            "name": "self",
+            "container": "window"
+          },
+          {
+            "start": 428574,
+            "duration": 2578,
+            "name": "self",
+            "container": "window"
+          }
+        ]
+      },
+      "frame": {
+        "frames": 3,
+        "p50": 50.1,
+        "p95": 9379.59,
+        "max": 10416.2,
+        "min": 5.6,
+        "estFps": 20,
+        "lowConfidence": true,
+        "redrawCounter": true,
+        "redrawFrames": 2,
+        "redrawIntervalMs": 5244,
+        "redraw": {
+          "frames": 2,
+          "p50": 5233.15,
+          "p95": 9897.89,
+          "max": 10416.2,
+          "min": 50.1,
+          "estFps": 0.2,
+          "lowConfidence": true
+        }
+      },
+      "worstStallMs": 10416,
+      "longtasks": [],
+      "animElapsedMs": 10487,
+      "deckMetrics": {
+        "fps": 37.541359124456925,
+        "framesRedrawn": 0,
+        "gpuTime": 0,
+        "cpuTime": 10.900000000372529
+      },
+      "screenshot": {
+        "path": "scripts/qa/out/tokyo-z4.60.png",
+        "ok": true,
+        "width": 900,
+        "height": 560,
+        "samples": 72000,
+        "mean": 31.96,
+        "stdev": 23.28,
+        "min": 1.08,
+        "max": 255,
+        "distinctColors": 957
+      },
+      "consoleErrors": [],
+      "pageErrors": [],
+      "newErrors": 0
+    },
+    {
+      "id": "tokyo@z5.50",
+      "region": "tokyo",
+      "regionLabel": "Tokyo",
+      "density": "dense",
+      "longitude": 139.7,
+      "latitude": 35.68,
+      "zoom": 5.5,
+      "expectedTier": "r8",
+      "tier": "r8",
+      "tierCells": 65892,
+      "renderedCells": 65892,
+      "capExceeded": false,
+      "loadedLods": [
+        "overview",
+        "mid"
+      ],
+      "settle": {
+        "ms": 41474,
+        "tierReached": true,
+        "quiet": false,
+        "worstStallMs": 41415,
+        "longtasks": [
+          {
+            "start": 451956,
+            "duration": 41397,
+            "name": "self",
+            "container": "window"
+          }
+        ]
+      },
+      "frame": {
+        "frames": 3,
+        "p50": 50,
+        "p95": 6424.7,
+        "max": 7133,
+        "min": -6.8,
+        "estFps": 20,
+        "lowConfidence": true,
+        "redrawCounter": true,
+        "redrawFrames": 2,
+        "redrawIntervalMs": 3594,
+        "redraw": {
+          "frames": 2,
+          "p50": 3591.5,
+          "p95": 6778.85,
+          "max": 7133,
+          "min": 50,
+          "estFps": 0.3,
+          "lowConfidence": true
+        }
+      },
+      "worstStallMs": 7133,
+      "longtasks": [],
+      "animElapsedMs": 7188,
+      "deckMetrics": {
+        "fps": 6.963212991703078,
+        "framesRedrawn": 4,
+        "gpuTime": 0,
+        "cpuTime": 4795
+      },
+      "screenshot": {
+        "path": "scripts/qa/out/tokyo-z5.50.png",
+        "ok": true,
+        "width": 900,
+        "height": 560,
+        "samples": 72000,
+        "mean": 37.1,
+        "stdev": 27.67,
+        "min": 1.08,
+        "max": 255,
+        "distinctColors": 1312
+      },
+      "consoleErrors": [],
+      "pageErrors": [],
+      "newErrors": 0
+    },
+    {
+      "id": "tokyo@z6.50",
+      "region": "tokyo",
+      "regionLabel": "Tokyo",
+      "density": "dense",
+      "longitude": 139.7,
+      "latitude": 35.68,
+      "zoom": 6.5,
+      "expectedTier": "r8",
+      "tier": "r8",
+      "tierCells": 38298,
+      "renderedCells": 38298,
+      "capExceeded": false,
+      "loadedLods": [
+        "overview",
+        "mid"
+      ],
+      "settle": {
+        "ms": 26445,
+        "tierReached": true,
+        "quiet": false,
+        "worstStallMs": 19285,
+        "longtasks": [
+          {
+            "start": 515337,
+            "duration": 19285,
+            "name": "self",
+            "container": "window"
+          }
+        ]
+      },
+      "frame": {
+        "frames": 4,
+        "p50": 16.7,
+        "p95": 6051.45,
+        "max": 7116.4,
+        "min": -1.3,
+        "estFps": 59.9,
+        "lowConfidence": true,
+        "redrawCounter": true,
+        "redrawFrames": 3,
+        "redrawIntervalMs": 2384,
+        "redraw": {
+          "frames": 3,
+          "p50": 16.7,
+          "p95": 6406.43,
+          "max": 7116.4,
+          "min": 16.7,
+          "estFps": 59.9,
+          "lowConfidence": true
+        }
+      },
+      "worstStallMs": 7116,
+      "longtasks": [],
+      "animElapsedMs": 7152,
+      "deckMetrics": {
+        "fps": 6.963212991703078,
+        "framesRedrawn": 4,
+        "gpuTime": 0,
+        "cpuTime": 4795
+      },
+      "screenshot": {
+        "path": "scripts/qa/out/tokyo-z6.50.png",
+        "ok": true,
+        "width": 900,
+        "height": 560,
+        "samples": 72000,
+        "mean": 47.39,
+        "stdev": 37.04,
+        "min": 1.79,
+        "max": 255,
+        "distinctColors": 1601
+      },
+      "consoleErrors": [],
+      "pageErrors": [],
+      "newErrors": 0
+    },
+    {
+      "id": "cairo@z2.30",
+      "region": "cairo",
+      "regionLabel": "Cairo",
+      "density": "dense",
+      "longitude": 31.24,
+      "latitude": 30.04,
+      "zoom": 2.3,
+      "expectedTier": "mid",
+      "tier": "mid",
+      "tierCells": 2016971,
+      "renderedCells": 120000,
+      "capExceeded": false,
+      "loadedLods": [
+        "overview",
+        "mid"
+      ],
+      "settle": {
+        "ms": 21546,
+        "tierReached": true,
+        "quiet": false,
+        "worstStallMs": 10789,
+        "longtasks": [
+          {
+            "start": 545301,
+            "duration": 112,
+            "name": "self",
+            "container": "window"
+          },
+          {
+            "start": 545413,
+            "duration": 10789,
+            "name": "self",
+            "container": "window"
+          }
+        ]
+      },
+      "frame": {
+        "frames": 3,
+        "p50": 116.7,
+        "p95": 9701.34,
+        "max": 10766.3,
+        "min": 3.6,
+        "estFps": 8.6,
+        "lowConfidence": true,
+        "redrawCounter": true,
+        "redrawFrames": 2,
+        "redrawIntervalMs": 5451,
+        "redraw": {
+          "frames": 2,
+          "p50": 5441.5,
+          "p95": 10233.82,
+          "max": 10766.3,
+          "min": 116.7,
+          "estFps": 0.2,
+          "lowConfidence": true
+        }
+      },
+      "worstStallMs": 10766,
+      "longtasks": [
+        {
+          "start": 567099,
+          "duration": 107,
+          "name": "self"
+        }
+      ],
+      "animElapsedMs": 10902,
+      "deckMetrics": {
+        "fps": 6.963212991703078,
+        "framesRedrawn": 4,
+        "gpuTime": 0,
+        "cpuTime": 4795
+      },
+      "screenshot": {
+        "path": "scripts/qa/out/cairo-z2.30.png",
+        "ok": true,
+        "width": 900,
+        "height": 560,
+        "samples": 72000,
+        "mean": 19.83,
+        "stdev": 32.56,
+        "min": 1,
+        "max": 255,
+        "distinctColors": 836
+      },
+      "consoleErrors": [],
+      "pageErrors": [],
+      "newErrors": 0
+    },
+    {
+      "id": "cairo@z5.50",
+      "region": "cairo",
+      "regionLabel": "Cairo",
+      "density": "dense",
+      "longitude": 31.24,
+      "latitude": 30.04,
+      "zoom": 5.5,
+      "expectedTier": "r8",
+      "tier": "r8",
+      "tierCells": 68711,
+      "renderedCells": 68711,
+      "capExceeded": false,
+      "loadedLods": [
+        "overview",
+        "mid"
+      ],
+      "settle": {
+        "ms": 49254,
+        "tierReached": true,
+        "quiet": false,
+        "worstStallMs": 28075,
+        "longtasks": [
+          {
+            "start": 578019,
+            "duration": 105,
+            "name": "self",
+            "container": "window"
+          },
+          {
+            "start": 599305,
+            "duration": 28075,
+            "name": "self",
+            "container": "window"
+          }
+        ]
+      },
+      "frame": {
+        "frames": 3,
+        "p50": 33.4,
+        "p95": 6543.01,
+        "max": 7266.3,
+        "min": 12.1,
+        "estFps": 29.9,
+        "lowConfidence": true,
+        "redrawCounter": true,
+        "redrawFrames": 1,
+        "redrawIntervalMs": 7329,
+        "redraw": {
+          "frames": 1,
+          "p50": 7266.3,
+          "p95": 7266.3,
+          "max": 7266.3,
+          "min": 7266.3,
+          "estFps": 0.1,
+          "lowConfidence": true
+        }
+      },
+      "worstStallMs": 7266,
+      "longtasks": [],
+      "animElapsedMs": 7329,
+      "deckMetrics": {
+        "fps": 6.963212991703078,
+        "framesRedrawn": 4,
+        "gpuTime": 0,
+        "cpuTime": 4795
+      },
+      "screenshot": {
+        "path": "scripts/qa/out/cairo-z5.50.png",
+        "ok": true,
+        "width": 900,
+        "height": 560,
+        "samples": 72000,
+        "mean": 17,
+        "stdev": 25.5,
+        "min": 1,
+        "max": 255,
+        "distinctColors": 849
+      },
+      "consoleErrors": [],
+      "pageErrors": [],
+      "newErrors": 0
+    },
+    {
+      "id": "ocean@z1.30",
+      "region": "ocean",
+      "regionLabel": "S-Pacific",
+      "density": "sparse",
+      "longitude": -140,
+      "latitude": -30,
+      "zoom": 1.3,
+      "expectedTier": "overview",
+      "tier": "overview",
+      "tierCells": 71283,
+      "renderedCells": 71283,
+      "capExceeded": false,
+      "loadedLods": [
+        "overview",
+        "mid"
+      ],
+      "settle": {
+        "ms": 16292,
+        "tierReached": true,
+        "quiet": false,
+        "worstStallMs": 22287,
+        "longtasks": [
+          {
+            "start": 641684,
+            "duration": 22287,
+            "name": "self",
+            "container": "window"
+          },
+          {
+            "start": 664045,
+            "duration": 16150,
+            "name": "self",
+            "container": "window"
+          }
+        ]
+      },
+      "frame": {
+        "frames": 3,
+        "p50": 116.7,
+        "p95": 6656.37,
+        "max": 7383,
+        "min": 15.1,
+        "estFps": 8.6,
+        "lowConfidence": true,
+        "redrawCounter": true,
+        "redrawFrames": 2,
+        "redrawIntervalMs": 3761,
+        "redraw": {
+          "frames": 2,
+          "p50": 3749.85,
+          "p95": 7019.68,
+          "max": 7383,
+          "min": 116.7,
+          "estFps": 0.3,
+          "lowConfidence": true
+        }
+      },
+      "worstStallMs": 7383,
+      "longtasks": [],
+      "animElapsedMs": 7522,
+      "deckMetrics": {
+        "fps": 0.29037276480642704,
+        "framesRedrawn": 26,
+        "gpuTime": 0,
+        "cpuTime": 110317.69999999786
+      },
+      "screenshot": {
+        "path": "scripts/qa/out/ocean-z1.30.png",
+        "ok": true,
+        "width": 900,
+        "height": 560,
+        "samples": 72000,
+        "mean": 18.2,
+        "stdev": 25,
+        "min": 1,
+        "max": 255,
+        "distinctColors": 839
+      },
+      "consoleErrors": [],
+      "pageErrors": [],
+      "newErrors": 0
+    },
+    {
+      "id": "ocean@z4.60",
+      "region": "ocean",
+      "regionLabel": "S-Pacific",
+      "density": "sparse",
+      "longitude": -140,
+      "latitude": -30,
+      "zoom": 4.6,
+      "expectedTier": "r8",
+      "tier": "mid",
+      "tierCells": 2016971,
+      "renderedCells": 53,
+      "capExceeded": false,
+      "loadedLods": [
+        "overview",
+        "mid"
+      ],
+      "settle": {
+        "ms": 27554,
+        "tierReached": false,
+        "quiet": false,
+        "worstStallMs": 20249,
+        "longtasks": [
+          {
+            "start": 702813,
+            "duration": 20237,
+            "name": "self",
+            "container": "window"
+          }
+        ]
+      },
+      "frame": {
+        "frames": 8,
+        "p50": 258.3,
+        "p95": 419.08,
+        "max": 483.2,
+        "min": 4.3,
+        "estFps": 3.9,
+        "lowConfidence": true,
+        "redrawCounter": true,
+        "redrawFrames": 7,
+        "redrawIntervalMs": 239,
+        "redraw": {
+          "frames": 7,
+          "p50": 266.6,
+          "p95": 428.24,
+          "max": 483.2,
+          "min": 33.4,
+          "estFps": 3.8,
+          "lowConfidence": true
+        }
+      },
+      "worstStallMs": 483,
+      "longtasks": [],
+      "animElapsedMs": 1674,
+      "deckMetrics": {
+        "fps": 0.29037276480642704,
+        "framesRedrawn": 26,
+        "gpuTime": 0,
+        "cpuTime": 110317.69999999786
+      },
+      "screenshot": {
+        "path": "scripts/qa/out/ocean-z4.60.png",
+        "ok": true,
+        "width": 900,
+        "height": 560,
+        "samples": 72000,
+        "mean": 12.26,
+        "stdev": 17.67,
+        "min": 1,
+        "max": 255,
+        "distinctColors": 213
+      },
+      "consoleErrors": [],
+      "pageErrors": [],
+      "newErrors": 0
+    }
+  ],
+  "crossings": [
+    {
+      "id": "cross-2.2",
+      "region": "Tokyo",
+      "from": 2,
+      "to": 2.45,
+      "rampReachedZoom": 2.45,
+      "tierBefore": "overview",
+      "tierAfter": "mid",
+      "cellsBefore": 71283,
+      "cellsAfter": 120000,
+      "frame": {
+        "frames": 4,
+        "p50": 4233.2,
+        "p95": 14892.76,
+        "max": 16032.7,
+        "min": 13.3,
+        "estFps": 0.2,
+        "lowConfidence": true,
+        "redrawCounter": true,
+        "redrawFrames": 3,
+        "redrawIntervalMs": 15742,
+        "redraw": {
+          "frames": 3,
+          "p50": 8433.1,
+          "p95": 15272.74,
+          "max": 16032.7,
+          "min": 33.3,
+          "estFps": 0.1,
+          "lowConfidence": true
+        }
+      },
+      "elapsedMs": 47225,
+      "worstStallMs": 36782,
+      "longtasks": [
+        {
+          "start": 155555,
+          "duration": 2538,
+          "name": "self"
+        },
+        {
+          "start": 155555,
+          "duration": 2538,
+          "name": "self",
+          "container": "window"
+        },
+        {
+          "start": 163858,
+          "duration": 22765,
+          "name": "self",
+          "container": "window"
+        },
+        {
+          "start": 186654,
+          "duration": 55,
+          "name": "self",
+          "container": "window"
+        },
+        {
+          "start": 186974,
+          "duration": 36559,
+          "name": "self",
+          "container": "window"
+        }
+      ],
+      "settle": {
+        "ms": 36892,
+        "worstStallMs": 36782,
+        "tierReached": true
+      },
+      "screenshot": {
+        "path": "scripts/qa/out/cross-2.2.png",
+        "ok": true,
+        "width": 900,
+        "height": 560,
+        "samples": 72000,
+        "mean": 25.63,
+        "stdev": 33.97,
+        "min": 1,
+        "max": 255,
+        "distinctColors": 1060
+      },
+      "consoleErrors": []
+    },
+    {
+      "id": "cross-4.5",
+      "region": "Tokyo",
+      "from": 4.3,
+      "to": 4.7,
+      "rampReachedZoom": 4.7,
+      "tierBefore": "mid",
+      "tierAfter": "mid",
+      "cellsBefore": 31441,
+      "cellsAfter": 15412,
+      "frame": {
+        "frames": 4,
+        "p50": 3225.95,
+        "p95": 5397.3,
+        "max": 5749.8,
+        "min": 50,
+        "estFps": 0.3,
+        "lowConfidence": true,
+        "redrawCounter": true,
+        "redrawFrames": 3,
+        "redrawIntervalMs": 5778,
+        "redraw": {
+          "frames": 3,
+          "p50": 3399.8,
+          "p95": 5514.8,
+          "max": 5749.8,
+          "min": 50,
+          "estFps": 0.3,
+          "lowConfidence": true
+        }
+      },
+      "elapsedMs": 17335,
+      "worstStallMs": 6077,
+      "longtasks": [
+        {
+          "start": 398388,
+          "duration": 3385,
+          "name": "self"
+        },
+        {
+          "start": 398388,
+          "duration": 3385,
+          "name": "self",
+          "container": "window"
+        },
+        {
+          "start": 401797,
+          "duration": 5737,
+          "name": "self",
+          "container": "window"
+        },
+        {
+          "start": 407546,
+          "duration": 5089,
+          "name": "self",
+          "container": "window"
+        },
+        {
+          "start": 412641,
+          "duration": 6077,
+          "name": "self",
+          "container": "window"
+        }
+      ],
+      "settle": {
+        "ms": 11362,
+        "worstStallMs": 6077,
+        "tierReached": false
+      },
+      "screenshot": {
+        "path": "scripts/qa/out/cross-4.5.png",
+        "ok": true,
+        "width": 900,
+        "height": 560,
+        "samples": 72000,
+        "mean": 41.21,
+        "stdev": 36.53,
+        "min": 1.08,
+        "max": 255,
+        "distinctColors": 1586
+      },
+      "consoleErrors": []
+    }
+  ],
+  "freezes": [
+    {
+      "phase": "tokyo@z0.50",
+      "ms": 6283,
+      "where": "steady-state pan"
+    },
+    {
+      "phase": "tokyo@z0.50",
+      "ms": 7412,
+      "where": "settle after camera move"
+    },
+    {
+      "phase": "tokyo@z1.30",
+      "ms": 6733,
+      "where": "steady-state pan"
+    },
+    {
+      "phase": "tokyo@z1.30",
+      "ms": 6183,
+      "where": "settle after camera move"
+    },
+    {
+      "phase": "tokyo@z2.00",
+      "ms": 7500,
+      "where": "steady-state pan"
+    },
+    {
+      "phase": "tokyo@z2.00",
+      "ms": 7545,
+      "where": "settle after camera move"
+    },
+    {
+      "phase": "cross-2.2",
+      "ms": 36782,
+      "where": "zoom ramp 2 → 2.45 + settle"
+    },
+    {
+      "phase": "tokyo@z2.30",
+      "ms": 12200,
+      "where": "steady-state pan"
+    },
+    {
+      "phase": "tokyo@z2.30",
+      "ms": 12316,
+      "where": "settle after camera move"
+    },
+    {
+      "phase": "tokyo@z3.00",
+      "ms": 12350,
+      "where": "steady-state pan"
+    },
+    {
+      "phase": "tokyo@z3.00",
+      "ms": 12298,
+      "where": "settle after camera move"
+    },
+    {
+      "phase": "tokyo@z4.00",
+      "ms": 8883,
+      "where": "steady-state pan"
+    },
+    {
+      "phase": "tokyo@z4.00",
+      "ms": 22371,
+      "where": "settle after camera move"
+    },
+    {
+      "phase": "cross-4.5",
+      "ms": 6077,
+      "where": "zoom ramp 4.3 → 4.7 + settle"
+    },
+    {
+      "phase": "tokyo@z4.60",
+      "ms": 10416,
+      "where": "steady-state pan"
+    },
+    {
+      "phase": "tokyo@z4.60",
+      "ms": 2578,
+      "where": "settle after camera move"
+    },
+    {
+      "phase": "tokyo@z5.50",
+      "ms": 7133,
+      "where": "steady-state pan"
+    },
+    {
+      "phase": "tokyo@z5.50",
+      "ms": 41415,
+      "where": "settle after camera move"
+    },
+    {
+      "phase": "tokyo@z6.50",
+      "ms": 7116,
+      "where": "steady-state pan"
+    },
+    {
+      "phase": "tokyo@z6.50",
+      "ms": 19285,
+      "where": "settle after camera move"
+    },
+    {
+      "phase": "cairo@z2.30",
+      "ms": 10766,
+      "where": "steady-state pan"
+    },
+    {
+      "phase": "cairo@z2.30",
+      "ms": 10789,
+      "where": "settle after camera move"
+    },
+    {
+      "phase": "cairo@z5.50",
+      "ms": 7266,
+      "where": "steady-state pan"
+    },
+    {
+      "phase": "cairo@z5.50",
+      "ms": 28075,
+      "where": "settle after camera move"
+    },
+    {
+      "phase": "ocean@z1.30",
+      "ms": 7383,
+      "where": "steady-state pan"
+    },
+    {
+      "phase": "ocean@z1.30",
+      "ms": 22287,
+      "where": "settle after camera move"
+    },
+    {
+      "phase": "ocean@z4.60",
+      "ms": 20249,
+      "where": "settle after camera move"
+    }
+  ],
+  "consoleErrors": [],
+  "consoleWarnings": [],
+  "pageErrors": [],
+  "requests": [
+    {
+      "phase": "boot",
+      "url": "data/manifest.json",
+      "at": 4269
+    },
+    {
+      "phase": "boot",
+      "url": "data/manifest.json",
+      "at": 4269
+    },
+    {
+      "phase": "boot",
+      "url": "data/land.geojson",
+      "at": 4741
+    },
+    {
+      "phase": "boot",
+      "url": "data/overview.parquet",
+      "at": 5424
+    },
+    {
+      "phase": "cross-2.2",
+      "url": "data/mid.parquet",
+      "at": 155961
+    },
+    {
+      "phase": "cross-4.5",
+      "url": "data/tiles/r8/index.json",
+      "at": 402333
+    },
+    {
+      "phase": "cross-4.5",
+      "url": "data/tiles/r8/index.json",
+      "at": 408094
+    },
+    {
+      "phase": "cross-4.5",
+      "url": "data/tiles/r8/index.json",
+      "at": 413190
+    },
+    {
+      "phase": "tokyo@z4.60",
+      "url": "data/tiles/r8/parent=832f5afffffffff/data_0.parquet",
+      "at": 424758
+    },
+    {
+      "phase": "tokyo@z4.60",
+      "url": "data/tiles/r8/parent=832e2dfffffffff/data_0.parquet",
+      "at": 424758
+    },
+    {
+      "phase": "tokyo@z4.60",
+      "url": "data/tiles/r8/parent=832e29fffffffff/data_0.parquet",
+      "at": 424758
+    },
+    {
+      "phase": "tokyo@z4.60",
+      "url": "data/tiles/r8/parent=832e74fffffffff/data_0.parquet",
+      "at": 424758
+    },
+    {
+      "phase": "tokyo@z4.60",
+      "url": "data/tiles/r8/parent=832f5bfffffffff/data_0.parquet",
+      "at": 424758
+    },
+    {
+      "phase": "tokyo@z4.60",
+      "url": "data/tiles/r8/parent=832f58fffffffff/data_0.parquet",
+      "at": 424758
+    },
+    {
+      "phase": "tokyo@z4.60",
+      "url": "data/tiles/r8/parent=832f5efffffffff/data_0.parquet",
+      "at": 424758
+    },
+    {
+      "phase": "tokyo@z4.60",
+      "url": "data/tiles/r8/parent=832e28fffffffff/data_0.parquet",
+      "at": 424758
+    },
+    {
+      "phase": "tokyo@z4.60",
+      "url": "data/tiles/r8/parent=832e2bfffffffff/data_0.parquet",
+      "at": 424758
+    },
+    {
+      "phase": "tokyo@z4.60",
+      "url": "data/tiles/r8/parent=832e76fffffffff/data_0.parquet",
+      "at": 424758
+    },
+    {
+      "phase": "tokyo@z4.60",
+      "url": "data/tiles/r8/parent=832e70fffffffff/data_0.parquet",
+      "at": 424758
+    },
+    {
+      "phase": "tokyo@z4.60",
+      "url": "data/tiles/r8/parent=832e75fffffffff/data_0.parquet",
+      "at": 424758
+    },
+    {
+      "phase": "tokyo@z4.60",
+      "url": "data/tiles/r8/parent=832e66fffffffff/data_0.parquet",
+      "at": 424758
+    },
+    {
+      "phase": "tokyo@z4.60",
+      "url": "data/tiles/r8/parent=832f59fffffffff/data_0.parquet",
+      "at": 424758
+    },
+    {
+      "phase": "tokyo@z4.60",
+      "url": "data/tiles/r8/parent=832f5dfffffffff/data_0.parquet",
+      "at": 424758
+    },
+    {
+      "phase": "tokyo@z4.60",
+      "url": "data/tiles/r8/parent=832e2afffffffff/data_0.parquet",
+      "at": 424758
+    },
+    {
+      "phase": "tokyo@z4.60",
+      "url": "data/tiles/r8/parent=832e0cfffffffff/data_0.parquet",
+      "at": 424758
+    },
+    {
+      "phase": "tokyo@z4.60",
+      "url": "data/tiles/r8/parent=832e0dfffffffff/data_0.parquet",
+      "at": 424758
+    },
+    {
+      "phase": "tokyo@z4.60",
+      "url": "data/tiles/r8/parent=832e72fffffffff/data_0.parquet",
+      "at": 424758
+    },
+    {
+      "phase": "tokyo@z4.60",
+      "url": "data/tiles/r8/parent=832e73fffffffff/data_0.parquet",
+      "at": 424758
+    },
+    {
+      "phase": "tokyo@z4.60",
+      "url": "data/tiles/r8/parent=832e71fffffffff/data_0.parquet",
+      "at": 424758
+    },
+    {
+      "phase": "tokyo@z4.60",
+      "url": "data/tiles/r8/parent=832e62fffffffff/data_0.parquet",
+      "at": 424758
+    },
+    {
+      "phase": "tokyo@z4.60",
+      "url": "data/tiles/r8/parent=832e60fffffffff/data_0.parquet",
+      "at": 424758
+    },
+    {
+      "phase": "tokyo@z4.60",
+      "url": "data/tiles/r8/parent=832e64fffffffff/data_0.parquet",
+      "at": 424759
+    },
+    {
+      "phase": "tokyo@z4.60",
+      "url": "data/tiles/r8/parent=832f4efffffffff/data_0.parquet",
+      "at": 424759
+    },
+    {
+      "phase": "tokyo@z4.60",
+      "url": "data/tiles/r8/parent=832f43fffffffff/data_0.parquet",
+      "at": 424759
+    },
+    {
+      "phase": "tokyo@z4.60",
+      "url": "data/tiles/r8/parent=832e01fffffffff/data_0.parquet",
+      "at": 428810
+    },
+    {
+      "phase": "tokyo@z4.60",
+      "url": "data/tiles/r8/parent=832e0efffffffff/data_0.parquet",
+      "at": 428810
+    },
+    {
+      "phase": "tokyo@z4.60",
+      "url": "data/tiles/r8/parent=832e08fffffffff/data_0.parquet",
+      "at": 428810
+    },
+    {
+      "phase": "tokyo@z4.60",
+      "url": "data/tiles/r8/parent=832e46fffffffff/data_0.parquet",
+      "at": 428810
+    },
+    {
+      "phase": "tokyo@z4.60",
+      "url": "data/tiles/r8/parent=832e44fffffffff/data_0.parquet",
+      "at": 428810
+    },
+    {
+      "phase": "tokyo@z4.60",
+      "url": "data/tiles/r8/parent=832e63fffffffff/data_0.parquet",
+      "at": 428810
+    },
+    {
+      "phase": "tokyo@z4.60",
+      "url": "data/tiles/r8/parent=832e61fffffffff/data_0.parquet",
+      "at": 428810
+    },
+    {
+      "phase": "tokyo@z4.60",
+      "url": "data/tiles/r8/parent=832e65fffffffff/data_0.parquet",
+      "at": 428810
+    },
+    {
+      "phase": "tokyo@z4.60",
+      "url": "data/tiles/r8/parent=832f41fffffffff/data_0.parquet",
+      "at": 428811
+    },
+    {
+      "phase": "cairo@z5.50",
+      "url": "data/tiles/r8/parent=833e62fffffffff/data_0.parquet",
+      "at": 578688
+    },
+    {
+      "phase": "cairo@z5.50",
+      "url": "data/tiles/r8/parent=833e75fffffffff/data_0.parquet",
+      "at": 578688
+    },
+    {
+      "phase": "cairo@z5.50",
+      "url": "data/tiles/r8/parent=833e71fffffffff/data_0.parquet",
+      "at": 578688
+    },
+    {
+      "phase": "cairo@z5.50",
+      "url": "data/tiles/r8/parent=833e44fffffffff/data_0.parquet",
+      "at": 578689
+    },
+    {
+      "phase": "cairo@z5.50",
+      "url": "data/tiles/r8/parent=833e63fffffffff/data_0.parquet",
+      "at": 578689
+    },
+    {
+      "phase": "cairo@z5.50",
+      "url": "data/tiles/r8/parent=833e60fffffffff/data_0.parquet",
+      "at": 578689
+    },
+    {
+      "phase": "cairo@z5.50",
+      "url": "data/tiles/r8/parent=833e66fffffffff/data_0.parquet",
+      "at": 578689
+    },
+    {
+      "phase": "cairo@z5.50",
+      "url": "data/tiles/r8/parent=833f5bfffffffff/data_0.parquet",
+      "at": 578689
+    },
+    {
+      "phase": "cairo@z5.50",
+      "url": "data/tiles/r8/parent=833e74fffffffff/data_0.parquet",
+      "at": 578689
+    },
+    {
+      "phase": "cairo@z5.50",
+      "url": "data/tiles/r8/parent=833e70fffffffff/data_0.parquet",
+      "at": 578689
+    },
+    {
+      "phase": "cairo@z5.50",
+      "url": "data/tiles/r8/parent=833e73fffffffff/data_0.parquet",
+      "at": 578690
+    },
+    {
+      "phase": "cairo@z5.50",
+      "url": "data/tiles/r8/parent=833e46fffffffff/data_0.parquet",
+      "at": 578690
+    },
+    {
+      "phase": "cairo@z5.50",
+      "url": "data/tiles/r8/parent=833e40fffffffff/data_0.parquet",
+      "at": 578690
+    },
+    {
+      "phase": "cairo@z5.50",
+      "url": "data/tiles/r8/parent=833e45fffffffff/data_0.parquet",
+      "at": 578690
+    },
+    {
+      "phase": "cairo@z5.50",
+      "url": "data/tiles/r8/parent=833e6efffffffff/data_0.parquet",
+      "at": 578690
+    },
+    {
+      "phase": "cairo@z5.50",
+      "url": "data/tiles/r8/parent=833e61fffffffff/data_0.parquet",
+      "at": 578690
+    },
+    {
+      "phase": "cairo@z5.50",
+      "url": "data/tiles/r8/parent=833e65fffffffff/data_0.parquet",
+      "at": 578690
+    },
+    {
+      "phase": "cairo@z5.50",
+      "url": "data/tiles/r8/parent=833e64fffffffff/data_0.parquet",
+      "at": 578691
+    },
+    {
+      "phase": "cairo@z5.50",
+      "url": "data/tiles/r8/parent=833f59fffffffff/data_0.parquet",
+      "at": 578691
+    },
+    {
+      "phase": "cairo@z5.50",
+      "url": "data/tiles/r8/parent=833f5afffffffff/data_0.parquet",
+      "at": 580480
+    },
+    {
+      "phase": "cairo@z5.50",
+      "url": "data/tiles/r8/parent=833e29fffffffff/data_0.parquet",
+      "at": 580481
+    },
+    {
+      "phase": "cairo@z5.50",
+      "url": "data/tiles/r8/parent=833e72fffffffff/data_0.parquet",
+      "at": 580482
+    },
+    {
+      "phase": "cairo@z5.50",
+      "url": "data/tiles/r8/parent=833e54fffffffff/data_0.parquet",
+      "at": 580482
+    },
+    {
+      "phase": "cairo@z5.50",
+      "url": "data/tiles/r8/parent=833e55fffffffff/data_0.parquet",
+      "at": 580482
+    },
+    {
+      "phase": "cairo@z5.50",
+      "url": "data/tiles/r8/parent=833e42fffffffff/data_0.parquet",
+      "at": 580483
+    },
+    {
+      "phase": "cairo@z5.50",
+      "url": "data/tiles/r8/parent=833e43fffffffff/data_0.parquet",
+      "at": 580483
+    },
+    {
+      "phase": "cairo@z5.50",
+      "url": "data/tiles/r8/parent=833e41fffffffff/data_0.parquet",
+      "at": 580483
+    },
+    {
+      "phase": "cairo@z5.50",
+      "url": "data/tiles/r8/parent=833e6afffffffff/data_0.parquet",
+      "at": 580483
+    },
+    {
+      "phase": "cairo@z5.50",
+      "url": "data/tiles/r8/parent=833e68fffffffff/data_0.parquet",
+      "at": 580483
+    },
+    {
+      "phase": "cairo@z5.50",
+      "url": "data/tiles/r8/parent=833e6cfffffffff/data_0.parquet",
+      "at": 580483
+    },
+    {
+      "phase": "cairo@z5.50",
+      "url": "data/tiles/r8/parent=832db6fffffffff/data_0.parquet",
+      "at": 580483
+    }
+  ],
+  "truncated": null,
+  "verdict": {
+    "pass": true,
+    "failures": [],
+    "warnings": [
+      "ocean@z4.60: active tier is \"mid\", expected \"r8\" (sparse region — r8 pyramid has no tile here, so the fallback is correct)",
+      "27 main-thread block(s) over 500 ms; worst 41415 ms at tokyo@z5.50 (settle after camera move) — see the FREEZES section"
+    ]
+  }
+}
