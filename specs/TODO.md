@@ -42,27 +42,6 @@ Ordered correctness first, then performance, then features. The three items at t
 came out of the 2026-11-17 code review; the rest are the standing queue, re-ordered so the
 boundary cache lands before the two items that rebuild cells on the path it changes.
 
-- [ ] Tolerate a failed r8 tile: `src/data/useTileStreaming.ts` awaits the visible tiles
-      with `Promise.all`, so ONE failed fetch rejects the lot — the merge below it, which
-      already filters to `cache.has(p)` and was plainly meant to publish partial sets,
-      never runs; the rejection is unhandled; and because `processedRef` was set before
-      the await, that view is never retried. One flaky tile = no r8 there until the camera
-      moves a degree. The idle prefetch has the same unhandled `Promise.all`. While in
-      there: `idx.tiles.find()` is a linear scan of 12,761 tiles per tile and
-      `new Set(idx.tiles.map(…))` is rebuilt on every view-key change — build one
-      `Map<parent, file>` when the index loads. Fix with `Promise.allSettled`, publish what
-      loaded, retry a failed tile a bounded number of times (not forever, not never),
-      `console.warn` once per failed tile. Pull tile selection / merge / eviction / retry
-      bookkeeping out of the hook into pure functions so Node can test them.
-      Accept: unit tests prove (a) with 1 of N tile loads rejecting, the merged tier holds
-      exactly the other N−1 tiles' cells, columns aligned; (b) a failed tile is retried and
-      appears once it succeeds, and a permanently failing tile stops being retried after
-      the bound; (c) the LRU cap (64), visible-tile protection and in-flight dedupe still
-      hold; and (d) one headless confirmation, recorded in the Done note with before/after:
-      dev server at `#139.7/35.68/5.5` with one tile request aborted (Playwright
-      `route.abort`) → `activeLod === 'r8'` with cells > 0 and no unhandled rejection
-      (keep the script under `scripts/qa/` so it can be re-run).
-      Gate: verify, qa:render.
 - [ ] Decode-worker failure must fall back, not hang: in `src/data/decodeClient.ts`,
       `worker.onerror` only zeroes `slot.inFlight` — requests already posted to that worker
       are never settled, so `loadLod()` never resolves and the app sits on the loader
@@ -111,6 +90,22 @@ boundary cache lands before the two items that rebuild cells on the path it chan
       top-k and cap tests still pass; and (e) a Node timing on the committed mid tier
       (`public/data/mid.parquet`, 2 M cells) shows the cull within 1.5× of its cost before
       the change — report both numbers.
+      Gate: verify, qa:render.
+- [ ] Tile-stream loose ends: two small defects the tick-1 checkers found in
+      `src/data/tileStream.ts`. (1) A partial burst never expires — only a success clears a
+      tile's failure count, so one prefetch failure ten minutes ago leaves `{count: 1}`, and
+      when the tile later becomes visible and fails it resumes at count 2 with no warning
+      and a shortened budget; a record older than the cool-down should start a new burst.
+      (2) An abandoned run's in-flight load still evicts under its *old* `protect` set, so
+      with more than 64 resident tiles it can evict a tile the current view just loaded —
+      and that tile has no failure record, so no timer re-requests it and the hole lasts
+      until the next view-key change (this predates tick 1). Evict against the current
+      view's protect set, or re-check the visible set after an eviction.
+      Accept: unit tests prove (a) a failure record older than the cool-down is treated as
+      a fresh burst — full budget, one warning; (b) with the cache at its cap, a stale
+      run's late-arriving tile never evicts a tile of the current visible set, and the
+      current view's merged tier is complete; (c) the existing 15 tile-stream tests pass
+      unchanged.
       Gate: verify, qa:render.
 - [ ] Cache H3 cell boundaries across re-culls: measured on the real mid tier, a re-cull
       at z2.5 costs ~284 ms of main-thread JS and **239 ms of that is `cellToBoundary` for
@@ -225,3 +220,41 @@ boundary cache lands before the two items that rebuild cells on the path it chan
       live at Shanghai z5.2: fetch log shows two bursts — 13 visible tiles at t≈0, then 10
       prefetch-ring tiles at t≈3.7s (idle) — and a +6° pan into the warmed ring fetched 0
       tiles (no flash). 0 console errors; `npm run verify` exit 0.)*
+- [x] Tolerate a failed r8 tile: `src/data/useTileStreaming.ts` awaits the visible tiles
+      with `Promise.all`, so ONE failed fetch rejects the lot — the merge below it, which
+      already filters to `cache.has(p)` and was plainly meant to publish partial sets,
+      never runs; the rejection is unhandled; and because `processedRef` was set before
+      the await, that view is never retried. One flaky tile = no r8 there until the camera
+      moves a degree. The idle prefetch has the same unhandled `Promise.all`. While in
+      there: `idx.tiles.find()` is a linear scan of 12,761 tiles per tile and
+      `new Set(idx.tiles.map(…))` is rebuilt on every view-key change — build one
+      `Map<parent, file>` when the index loads. Fix with `Promise.allSettled`, publish what
+      loaded, retry a failed tile a bounded number of times (not forever, not never),
+      `console.warn` once per failed tile. Pull tile selection / merge / eviction / retry
+      bookkeeping out of the hook into pure functions so Node can test them.
+      Accept: unit tests prove (a) with 1 of N tile loads rejecting, the merged tier holds
+      exactly the other N−1 tiles' cells, columns aligned; (b) a failed tile is retried and
+      appears once it succeeds, and a permanently failing tile stops being retried after
+      the bound; (c) the LRU cap (64), visible-tile protection and in-flight dedupe still
+      hold; and (d) one headless confirmation, recorded in the Done note with before/after:
+      dev server at `#139.7/35.68/5.5` with one tile request aborted (Playwright
+      `route.abort`) → `activeLod === 'r8'` with cells > 0 and no unhandled rejection
+      (keep the script under `scripts/qa/` so it can be re-run).
+      Gate: verify, qa:render.
+      *(Done 2026-11-17, factory tick 1: the bookkeeping moved to `src/data/tileStream.ts`
+      (`TileStream`, injected loader + clock); the visible load and the prefetch use
+      `allSettled` and publish what loaded; parent→file is one `Map`. Retry runs in bursts
+      of ≤ 3 attempts (2 s / 4 s backoff) followed by a 30 s cool-down — the maker's first
+      cut gave a tile up for the whole session, and was sent back because a ten-second
+      outage would then have left permanent r8 holes. Evidence: 15 unit tests in
+      `tileStream.test.ts` cover (a)–(c) plus the burst / cool-down edges; headless
+      `node scripts/qa/tile_fail.mjs` with the Tokyo tile `832f5afffffffff` aborted —
+      BEFORE (maker's run on the old code): `activeLod=mid r8Cells=0`, 1 unhandled
+      rejection; AFTER (re-run by the orchestrator): `activeLod=r8 r8Cells=52306
+      aligned=true`, 0 unhandled rejections, 3 aborted requests then quiet, 1 warning; with
+      `--fail-times 1` the tile recovers and the tier grows to 65,892 cells (maker's run).
+      Gate green: 75 tests, qa:render PASS, 0 console errors. Two independent checkers
+      PASSed; their minor findings are queued as "Tile-stream loose ends". Not verified: the
+      second burst after a cool-down in a real browser (Node tests with an injected clock
+      only), and retry timing on real hardware — SwiftShader blocks the main thread ~25 s
+      per r8 frame, so the timers fired late.)*

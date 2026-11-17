@@ -1,20 +1,11 @@
 import { useEffect, useRef } from 'react'
 import { BASE } from './load'
 import { decodeTable } from './decodeClient'
-import { concatPacked, h3Column } from './h3Column'
+import { TileStream } from './tileStream'
+import type { TileCols } from './tileStream'
 import { prefetchParents, visibleParents, viewKey } from '../lib/tiles'
 import { useGlobeStore } from '../store/useGlobeStore'
-import type { LodData, TileIndex } from '../types'
-
-/** A cached tile's columns. `h3` stays packed so merging is a typed-array copy. */
-interface TileCols {
-  h3: BigUint64Array
-  population: Float32Array
-  lng: Float32Array
-  lat: Float32Array
-}
-
-const TILE_CACHE_MAX = 64
+import type { GlobeViewState, TileIndex } from '../types'
 
 /** Run `cb` when the main thread is idle; falls back to a short timer. */
 function onIdle(cb: () => void): number {
@@ -28,91 +19,29 @@ function cancelIdle(id: number): void {
   else clearTimeout(id)
 }
 
-/** Evict least-recently-used tiles past the cap, never one in `protect` (visible). */
-function evictLru(cache: Map<string, TileCols>, protect: Set<string>): void {
-  while (cache.size > TILE_CACHE_MAX) {
-    let victim: string | undefined
-    for (const key of cache.keys()) {
-      if (!protect.has(key)) {
-        victim = key
-        break
-      }
-    }
-    if (victim === undefined) break // everything left is currently visible
-    cache.delete(victim)
-  }
+interface StreamControl {
+  key: string
+  gen: number
+  retry: number | null
+  idle: number | null
+  /** Parents in the tier last published for `key`; null until the first publish. */
+  published: string | null
 }
 
-/**
- * Ensure parent `p` is resident in `cache`: bump LRU recency on a hit, else fetch
- * (deduped via `inflight`) and insert, evicting LRU tiles that aren't in `protect`.
- * Shared by the visible-tile load and the idle prefetch.
- */
-async function ensureTile(
-  p: string,
-  idx: TileIndex,
-  cache: Map<string, TileCols>,
-  inflight: Map<string, Promise<TileCols>>,
-  protect: Set<string>,
-): Promise<void> {
-  const hit = cache.get(p)
-  if (hit) {
-    cache.delete(p)
-    cache.set(p, hit)
-    return
-  }
-  let job = inflight.get(p)
-  if (!job) {
-    const file = idx.tiles.find((t) => t.parent === p)!.file
-    job = (async () => {
-      // Decoded in a worker: a burst of tile parses during a pan used to land on the
-      // main thread, one stutter per tile.
-      const cols = await decodeTable(`${BASE}${file}`)
-      return {
-        h3: cols.h3.packed,
-        population: cols.population,
-        lng: cols.lng,
-        lat: cols.lat,
-      }
-    })()
-    inflight.set(p, job)
-  }
-  try {
-    const cols = await job
-    cache.set(p, cols)
-    evictLru(cache, protect)
-  } finally {
-    inflight.delete(p)
-  }
+/** Cancel the pending retry + idle prefetch and invalidate in-flight work. */
+function abandon(ctl: StreamControl): number {
+  if (ctl.retry !== null) clearTimeout(ctl.retry)
+  if (ctl.idle !== null) cancelIdle(ctl.idle)
+  ctl.retry = ctl.idle = null
+  return ++ctl.gen
 }
 
-function mergeTiles(parents: string[], cache: Map<string, TileCols>, idx: TileIndex): LodData {
-  let total = 0
-  for (const p of parents) total += cache.get(p)!.population.length
-  const population = new Float32Array(total)
-  const lng = new Float32Array(total)
-  const lat = new Float32Array(total)
-  let off = 0
-  for (const p of parents) {
-    const t = cache.get(p)!
-    population.set(t.population, off)
-    lng.set(t.lng, off)
-    lat.set(t.lat, off)
-    off += t.population.length
-  }
-  // Every column is now a typed-array `set()` — the old merge copied H3 strings
-  // one at a time, on the main thread, on every view-key change.
-  const h3 = h3Column(concatPacked(parents.map((p) => cache.get(p)!.h3), total))
-  return {
-    lod: 'r8',
-    h3Res: idx.h3Res,
-    approxKm: idx.approxKm,
-    h3,
-    population,
-    lng,
-    lat,
-    maxPopulation: idx.maxPopulation,
-  }
+/** Fetch + decode one tile in the worker pool; `h3` stays packed for the merge. */
+async function loadTile(file: string): Promise<TileCols> {
+  // Decoded in a worker: a burst of tile parses during a pan used to land on the
+  // main thread, one stutter per tile.
+  const cols = await decodeTable(`${BASE}${file}`)
+  return { h3: cols.h3.packed, population: cols.population, lng: cols.lng, lat: cols.lat }
 }
 
 /**
@@ -121,6 +50,11 @@ function mergeTiles(parents: string[], cache: Map<string, TileCols>, idx: TileIn
  * merged result to the store. Recomputes only when the coarse view key changes
  * (so auto-rotation / drag don't thrash). The merged set is viewport-culled at
  * render time by `cullForView`.
+ *
+ * A failed tile does not blank the view: whatever loaded is published, and the
+ * failed tile is retried on a bounded backoff (see `TileStream`). Work for a view
+ * is abandoned only when the coarse key changes — not on every same-key re-render,
+ * which would otherwise also cancel the pending retry.
  */
 export function useTileStreaming(): void {
   const manifest = useGlobeStore((s) => s.manifest)
@@ -129,63 +63,83 @@ export function useTileStreaming(): void {
 
   const r8 = manifest?.lods.find((l) => l.lod === 'r8' && l.tiled)
 
-  const indexRef = useRef<TileIndex | null>(null)
-  const cacheRef = useRef<Map<string, TileCols>>(new Map())
-  const inflightRef = useRef<Map<string, Promise<TileCols>>>(new Map())
-  const processedRef = useRef<string>('')
+  const streamRef = useRef<TileStream | null>(null)
+  /**
+   * `key`: the coarse view key being served. `gen`: bumped whenever the work for that
+   * key is abandoned (key change, zoom-out, unmount); async work checks it before
+   * publishing. `retry` / `idle`: the pending retry timer and idle-prefetch handle.
+   * `published`: what was last published for this key.
+   */
+  const ctlRef = useRef<StreamControl>({ key: '', gen: 0, retry: null, idle: null, published: null })
+
+  // Abandon in-flight work and pending timers on unmount.
+  useEffect(() => {
+    const ctl = ctlRef.current
+    return () => {
+      abandon(ctl)
+      ctl.key = ''
+    }
+  }, [])
 
   useEffect(() => {
     if (!r8?.indexFile) return
     const indexFile = r8.indexFile
+    const ctl = ctlRef.current
     if (view.zoom < r8.minZoom) {
-      processedRef.current = ''
+      if (ctl.key) abandon(ctl)
+      ctl.key = ''
       return
     }
     const coarse = viewKey(view)
-    if (coarse === processedRef.current) return
-    processedRef.current = coarse
+    if (coarse === ctl.key) return
+    ctl.key = coarse
+    const gen = abandon(ctl)
+    ctl.published = null
+    const live = () => ctl.gen === gen
+    const v: GlobeViewState = view
 
-    let cancelled = false
-    let idleId: number | null = null
-    const cache = cacheRef.current
-    const inflight = inflightRef.current
-
-    void (async () => {
-      if (!indexRef.current) {
+    const run = async (): Promise<void> => {
+      if (!streamRef.current) {
         try {
           const res = await fetch(`${BASE}${indexFile}`)
-          indexRef.current = (await res.json()) as TileIndex
+          const idx = (await res.json()) as TileIndex
+          streamRef.current ??= new TileStream(idx, loadTile)
         } catch (e) {
           console.error('r8 tile index failed to load', e)
           return
         }
       }
-      const idx = indexRef.current
-      if (cancelled || !idx) return
+      const stream = streamRef.current
+      if (!live()) return
 
-      const exist = new Set(idx.tiles.map((t) => t.parent))
-      const wanted = visibleParents(view, idx.parentRes).filter((p) => exist.has(p))
-      const protect = new Set(wanted)
+      const visible = visibleParents(v, stream.parentRes)
+      const res = await stream.loadVisible(visible)
+      if (!live()) return
+      // A retry that failed again merges the same tiles: republishing that identical
+      // set would rebuild the layer for nothing.
+      const loaded = res.loaded.join(',')
+      if (loaded !== ctl.published) {
+        ctl.published = loaded
+        setR8Data(res.data)
+      }
 
-      await Promise.all(wanted.map((p) => ensureTile(p, idx, cache, inflight, protect)))
-      if (cancelled) return
-
-      const loaded = wanted.filter((p) => cache.has(p))
-      setR8Data(loaded.length ? mergeTiles(loaded, cache, idx) : null)
+      if (res.retryInMs !== null) {
+        ctl.retry = setTimeout(() => {
+          ctl.retry = null
+          if (live()) void run()
+        }, res.retryInMs) as unknown as number
+      }
 
       // Idle prefetch of the next ring out: warm the cache (no setR8Data, so no
       // merge/rebuild) so panning reveals ready tiles instead of empty ones. The
       // visible set is protected from eviction, so prefetch can't drop live tiles.
-      idleId = onIdle(() => {
-        if (cancelled) return
-        const ring = prefetchParents(view, idx.parentRes).filter((p) => exist.has(p))
-        void Promise.all(ring.map((p) => ensureTile(p, idx, cache, inflight, protect)))
+      if (ctl.idle !== null) cancelIdle(ctl.idle)
+      ctl.idle = onIdle(() => {
+        ctl.idle = null
+        if (!live()) return
+        void stream.prefetch(prefetchParents(v, stream.parentRes), new Set(stream.select(visible)))
       })
-    })()
-
-    return () => {
-      cancelled = true
-      if (idleId !== null) cancelIdle(idleId)
     }
+    void run()
   }, [r8, view, setR8Data])
 }

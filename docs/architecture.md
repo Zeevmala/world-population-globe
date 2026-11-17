@@ -63,7 +63,13 @@ Kontur r8 *.gpkg  ──DuckDB(spatial+h3)──▶  COPY … PARTITION_BY(paren
 - **Client streaming** (`src/data/useTileStreaming.ts`): on a coarse view-key change, compute the
   visible parents (`src/lib/tiles.ts` → h3-js `latLngToCell` + `gridDisk`, k scaled by zoom),
   fetch the missing tiles (`readColumns`), **LRU-cache** (64 tiles, in-flight-deduped), and merge
-  the visible tiles' typed arrays into one `LodData` published to the store.
+  the visible tiles' typed arrays into one `LodData` published to the store. The bookkeeping lives
+  in `src/data/tileStream.ts` (pure, Node-tested). Visible tiles are awaited with `allSettled`: a
+  failed tile never blanks the view — the tiles that loaded are published, the failed one is
+  retried on a 2 s / 4 s backoff (and by any later view that wants it), at most 3 attempts per
+  burst; a spent tile rests 30 s after its last failure, then gets a fresh burst (the view's retry
+  timer wakes for it), so an outage heals instead of leaving permanent holes. One `console.warn`
+  per tile per burst; the clock is injectable so Node tests cover all of it.
 - **Render** reuses the same `H3HexagonLayer` path; the merged set is viewport-culled like `mid`.
 - **LOD selection** (`selectActive` in `lib/lod.ts`): r8 wins once zoom ≥ 4.5 and tiles are merged;
   otherwise the finest loaded whole tier (`pickLod`). Shared by `useGlobeLayers` and `Controls`.
@@ -85,7 +91,8 @@ src/
     h3Column.ts         # packed BigUint64 H3 indices + lazy string materialization
     parquet.ts          # hyparquet column reader (subpath import; inline-fallback path)
     useGlobeData.ts     # eager overview + lazy mid by zoom band
-    useTileStreaming.ts # r8 viewport tile fetch + LRU cache + merge + idle ring prefetch
+    tileStream.ts       # r8 tile cache: selection, LRU eviction, dedupe, merge, bounded retry
+    useTileStreaming.ts # r8 viewport hook: view key → tileStream, retry timer, idle ring prefetch
   lib/
     density.ts          # cell area per H3 res, people/km², shared cross-tier domain
     lod.ts              # pickLod() + selectActive() + hysteresis + cullForView() + quickselect cap
