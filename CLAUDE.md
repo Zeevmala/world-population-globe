@@ -6,7 +6,9 @@ Population (H3, CC-BY 4.0), in-browser SNAPPY Parquet via hyparquet, static GitH
 Anchor files: [VISION.md](VISION.md) north star · [docs/architecture.md](docs/architecture.md)
 locked decisions · [specs/TODO.md](specs/TODO.md) work queue + loop contract ·
 [PROMPT.md](PROMPT.md) per-tick iteration prompt · [PROJECT_STATE.md](PROJECT_STATE.md)
-sprint history / PM log.
+sprint history / PM log. The factory: [`/factory`](.claude/commands/factory.md) orchestrates
+a maker ([factory-implementer](.claude/agents/factory-implementer.md)) and a checker
+([factory-reviewer](.claude/agents/factory-reviewer.md)) around `npm run gate`.
 
 ## Stack
 
@@ -17,15 +19,19 @@ React 19 + TypeScript (strict) + Vite + Tailwind v4 · deck.gl 9 · Zustand · h
 
 | Command | Role |
 |---|---|
-| `npm run verify` | **The verifier** — `eslint .` then `tsc -b && vite build`; exit 0 = green |
+| `npm run verify` | **The verifier** — `eslint .` → `vitest run` → `tsc -b && vite build`; exit 0 = green |
+| `npm test` | Unit tests (vitest, plain Node, < 2 s) over the pure render logic — LOD + cull, density, scales, tiles, H3 column, deep-links |
+| `npm run gate` | **The factory gate** — path-scoped: queue lint + `verify` always; `qa:render --quick` if the browser loads what changed; `verify:data` if pipeline/data changed; every changed file < 100 MB |
+| `npm run queue -- <status\|next\|lint>` | The one parser of `specs/TODO.md` (first unchecked item, blocked state, format) |
 | `npm run verify:live [url]` | Post-deploy E2E — fetch + parse the deployed manifest/tiers/tile, Σ-pop check |
 | `npm run verify:data` | Local data gate — all 12,761 tiles + both tiers: Σ-pop, counts, CRS bounds, H3 parent roll-up, file sizes |
 | `npm run qa:render` | Headless render QA — zoom sweep, frame timing, stall + console-error gate |
 | `npm run dev` | Vite dev server (http://localhost:5173) |
 | `npm run data` / `npm run data:tiles` | Regenerate r4/r6 Parquet / r8 tile pyramid (Python + DuckDB) |
 
-CI: `.github/workflows/ci.yml` (typecheck + lint + build). Deploy: `deploy.yml`
-(Pages → `verify-live` post-deploy gate with 5×15 s CDN-propagation retries).
+CI: `.github/workflows/ci.yml` (`verify` + `verify:data` + queue lint). Deploy: `deploy.yml`
+(same gates before publishing → Pages → `verify-live` post-deploy gate with 5×15 s
+CDN-propagation retries).
 
 ## Invariants (violations are P0)
 
@@ -55,5 +61,9 @@ CI: `.github/workflows/ci.yml` (typecheck + lint + build). Deploy: `deploy.yml`
 
 - Conventional commits; `main` auto-deploys; Kontur CC-BY attribution stays in the UI footer.
 - Functional React components + hooks; Zustand for state; Tailwind utilities.
+- Logic that Node can check ships with a `*.test.ts` beside it. Keep hooks and workers
+  thin: the decision goes in a pure function, the test goes on the function.
+- The render gate drives the Vite dev server, which reloads on file changes — never edit
+  the tree while `npm run gate` / `npm run qa:render` is running, and never run two at once.
 - Progress is marked only in `specs/TODO.md` (`[x]` / `BLOCKED:`); sprint-level summaries
   go to `PROJECT_STATE.md`. The agent forgets — the repo doesn't.

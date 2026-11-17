@@ -315,18 +315,22 @@ Human / sprint cadence (this file is the PM log):
 4. **Verify (all layers below)** → 5. Update this file + commit → 6. Deploy via CI → 7. **Post-deploy gate**.
 
 Autonomous cadence (loop-engineering scaffolding, added 2026-06-11; continuous since 2026-08-30):
-- **Scheduled trigger:** Routine "world-population-globe — factory tick", cron `10 */6 * * *`
-  (every 6 h, fresh session). Each fire: health-check the live site, take the FIRST unchecked
-  item in `specs/TODO.md`, implement it, run the verifier chain, commit, push `loop/auto`,
-  open/update a PR. **It never pushes to `main`** — `main` auto-deploys to the public site, so
-  every autonomous change stays behind a human merge. If a fired session has no GitHub tooling
-  it still pushes the branch and prints the compare link.
+- **Trigger:** manual today — `/factory [ticks]` in a session, or `Invoke-RalphLoop.ps1`
+  in a worktree. An earlier revision of this file said a Routine fired every 6 h (and
+  `specs/TODO.md` said every 3 h); on 2026-11-17 no such scheduled task existed on the
+  account and nothing had landed since 2026-09-02 — see Sprint 8. A schedule, when one is
+  registered, should fire `/factory 1` on a branch and **never push to `main`**: `main`
+  auto-deploys to the public site, so every autonomous change stays behind a human merge.
+- **Maker / gate / checker:** `/factory` ([`.claude/commands/factory.md`](.claude/commands/factory.md))
+  spawns `factory-implementer`, runs `npm run gate` itself, then spawns `factory-reviewer`
+  with fresh context; it commits only on a green gate **and** a PASS.
 - **Queue + loop contract:** [`specs/TODO.md`](specs/TODO.md) — the loop's spine; one item = one tick = one commit.
 - **Anchors read every tick:** [`CLAUDE.md`](CLAUDE.md) operating rules + invariants; [`VISION.md`](VISION.md) north star.
 - **Per-tick prompt:** [`PROMPT.md`](PROMPT.md); **runner:** [`Invoke-RalphLoop.ps1`](Invoke-RalphLoop.ps1)
   (max-iter cap, no-progress ×3 halt, line-anchored `BLOCKED:` sentinel, per-iteration logs; worktree-only).
 - **`/loop` maintenance default:** [`.claude/loop.md`](.claude/loop.md) (uncommitted work → CI/deploy health → `verify:live` → queue).
-- **Verifier:** `npm run verify` (eslint + tsc + vite build, one exit code) locally; CI + `verify-live` post-deploy.
+- **Verifier:** `npm run verify` (eslint + unit tests + tsc + vite build, one exit code); `npm run gate`
+  adds the path-scoped render and data gates; CI + `verify-live` post-deploy.
 
 ## QA & verification loop
 
@@ -336,6 +340,7 @@ Defense in depth — each layer catches what the previous cannot:
 |---|---|---|
 | Data integrity | pipeline asserts (Σ pop ≈ 8.03 B, per-file < 100 MB, city spot-checks) | bad/incomplete data, CRS errors |
 | Static analysis | `tsc -b` + `eslint .` (CI) | type/lint regressions |
+| Unit tests | `npm test` — vitest over the pure render logic (CI) | wrong cull / LOD / encoding math that still type-checks |
 | Build | `vite build` (CI) | bundler/import resolution (e.g. subpath imports) |
 | Local visual QA | Claude Preview: load, zoom-to-city, screenshot, console/network | render bugs, runtime errors, wrong fetches |
 | **Post-deploy E2E** | `npm run verify:live` — fetches + parses the **deployed** manifest/tiers/tile the way the browser does (whole-file + gzip); wired as the `verify-live` CI job after Pages deploy | **deploy-only** failures (CDN gzip+range, propagation, 404s) |

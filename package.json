@@ -10,10 +10,13 @@
     "typecheck": "tsc -b",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "verify": "npm run lint && npm run build",
+    "test": "vitest run",
+    "verify": "npm run lint && npm run test && npm run build",
     "verify:live": "node scripts/verify_live.mjs",
     "verify:data": "node scripts/verify_data.mjs",
     "qa:render": "node scripts/qa/render_qa.mjs",
+    "gate": "node scripts/factory/gate.mjs",
+    "queue": "node scripts/factory/queue.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -44,6 +47,7 @@
     "tailwindcss": "^4.3.0",
     "typescript": "~6.0.2",
     "typescript-eslint": "^8.59.2",
-    "vite": "^8.0.12"
+    "vite": "^8.0.12",
+    "vitest": "^5.1.0"
   }
 }
