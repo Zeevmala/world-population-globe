@@ -42,13 +42,6 @@ Ordered correctness first, then performance, then features. Only items that do n
 depend on the open LOD-banding decision (see **Backlog**, first entry) are queued; the
 cull-window, tile-selection, popping and cross-fade work waits there for it.
 
-- [ ] Wire the render gate into CI: run `npm run qa:render` in `.github/workflows/ci.yml`
-      against the dev server, uploading the report + screenshots as artifacts, and fail on
-      console errors, a blank canvas or a broken cell cap (the exact checks — the
-      SwiftShader stall comparison stays advisory; see `scripts/qa/render_qa.mjs`).
-      Accept: CI job green on a clean PR and red on a deliberately-broken render; runtime
-      < 10 min.
-      Gate: verify.
 - [ ] Cache H3 cell boundaries across re-culls: measured on the real mid tier, a re-cull
       at z2.5 costs ~284 ms of main-thread JS and **239 ms of that is `cellToBoundary` for
       the 120 k rendered cells** (720 k vertices) — repaid in full on every re-cull during a
@@ -67,9 +60,23 @@ cull-window, tile-selection, popping and cross-fade work waits there for it.
 - [ ] Night-lights basemap toggle: swap the dark-ocean sphere texture for NASA Black Marble
       (public domain) behind a `Controls.tsx` toggle; columns must stay legible
       (data > basemap).
+      Waiting on the user (2026-11-17): the texture host (`eoimages.gsfc.nasa.gov`) is
+      refused by the cloud environment's network policy (proxy 403) — it needs that host
+      allowed, or the texture supplied in the repo.
       Accept: toggle works both ways at overview and r8 zoom; attribution line updated;
       the texture is < 2 MB and lazy-loaded (not in the first-paint path); 0 console errors.
       Gate: verify, qa:render.
+- [ ] Wire the render gate into CI: run `npm run qa:render` in `.github/workflows/ci.yml`
+      against the dev server, uploading the report + screenshots as artifacts, and fail on
+      console errors, a blank canvas or a broken cell cap (the exact checks — the
+      SwiftShader stall comparison stays advisory; see `scripts/qa/render_qa.mjs`).
+      Waiting on the user (2026-11-17): the Accept needs a real GitHub Actions run, and
+      `ci.yml` only triggers on a pull request or a push to `main` — a PR has not been
+      asked for. The same PR would be the first Actions run of the `verify` +
+      `verify:data` steps added to CI and to the deploy workflow in Sprint 8.
+      Accept: CI job green on a clean PR and red on a deliberately-broken render; runtime
+      < 10 min.
+      Gate: verify.
 
 ## Backlog (needs breakdown before queueing)
 
