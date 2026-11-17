@@ -57,16 +57,52 @@ export function selectActive(
   return { entry: manifest.lods.find((l) => l.lod === lod), data: lod ? loaded[lod] : undefined }
 }
 
-/** Smallest angular difference between two longitudes, handling the ±180 seam. */
-function lngDelta(a: number, b: number): number {
-  const d = Math.abs(a - b)
-  return Math.min(d, 360 - d)
-}
+const DEG = Math.PI / 180
 
 /** Approximate angular half-extent (degrees) of the viewport at a globe zoom. */
 function halfSpanDeg(zoom: number): number {
   return Math.min(60, 180 / Math.pow(2, zoom))
 }
+
+/** Zoom step of the re-cull key: a cull is reused for any zoom within ±0.125 of its bucket. */
+const ZOOM_STEP = 0.25
+
+/** The key's zoom bucket (center) for a camera zoom. */
+const quantizeZoom = (zoom: number) => Math.round(zoom / ZOOM_STEP) * ZOOM_STEP
+
+/** Re-cull position quantum (degrees of ground) for a zoom bucket ≈ halfSpan/4. */
+const positionQuantum = (zq: number) => Math.max(0.25, halfSpanDeg(zq) / 4)
+
+/**
+ * Angular radius (degrees, great-circle) of the spherical cap {@link cullForView} keeps.
+ * It is a function of the *key's* zoom bucket, not of the zoom of whichever view happened
+ * to trigger the cull, because the cull is then reused for every view sharing that key
+ * ({@link cullKeyFor}) — and all of their viewports must lie inside it.
+ *
+ * The bound: two views on one key have zooms in [zq − 0.125, zq + 0.125), so the widest
+ * viewport is halfSpan(zq − 0.125); and their centers are at most D apart, where
+ * D = 2·asin(√2·sin(q/2)) ≈ √2·q. (Same lat band: Δφ ≤ q; same lng bucket: Δλ·cos φ ≤ q at
+ * the band's equatorward edge, where cos φ is largest. Haversine: hav d = hav Δφ +
+ * cosφ₁cosφ₂·hav Δλ ≤ hav q + hav q, using c²·sin²(x/2) ≤ sin²(cx/2) for c ≤ 1. The polar
+ * bucket is < q across.) A cap of radius halfSpan(zq − 0.125) + D around any of them
+ * therefore covers the viewport of every other. That sum is ≈ 1.44·halfSpan(zq) while the
+ * quantum is halfSpan/4, so the established 1.5·halfSpan(zq) margin is kept as the floor;
+ * the sum only wins where the 0.25° quantum floor bites (zoom ≳ 9.5).
+ *
+ * Clamped to 90°: past a hemisphere is the far side of the globe, never on screen. (It
+ * only binds at zoom ≲ 1.6, where the half-span is capped at 60°; the mid tier starts at
+ * 2.05, where the radius is ≈ 67.5°.)
+ */
+export function cullRadiusDeg(zoom: number): number {
+  const zq = quantizeZoom(zoom)
+  const q = positionQuantum(zq)
+  const drift = (2 * Math.asin(Math.min(1, Math.SQRT2 * Math.sin((q / 2) * DEG)))) / DEG
+  const covering = halfSpanDeg(zq - ZOOM_STEP / 2) + drift
+  return Math.min(90, Math.max(1.5 * halfSpanDeg(zq), covering))
+}
+
+/** Latitude bins of the per-cull longitude half-width table (see {@link cullForView}). */
+const CAP_BINS = 2048
 
 /**
  * In-place iterative quickselect: rearrange `idx` so its first `k` entries are the
@@ -112,24 +148,50 @@ export interface CullResult {
  * view has moved a meaningful fraction of the viewport — not on every drag tick.
  * The quantum scales with zoom (≈ halfSpan/4): zoomed out, a 1° nudge is nothing
  * and shouldn't re-cull; zoomed in, the same nudge is a big move and should. The
- * cull window ({@link cullForView}) carries a wider margin than this quantum, so
- * cells never pop at the edges in the gap between re-culls.
+ * cull window ({@link cullRadiusDeg}) is sized from this key's buckets, so it covers
+ * the viewport of every view that maps to the key — cells never pop at the edges in the
+ * gap between re-culls, whether the camera drifted in position, zoom, or both.
+ *
+ * The quantum is a *ground* distance: latitude steps by `q` degrees, and longitude by
+ * `q / cos(φ)` where φ is the bucket's most equatorward latitude — so a bucket is never
+ * wider than `q` on the ground, and the re-cull cadence doesn't thrash as the camera
+ * nears a pole. Within `q/2` of a pole the longitude is meaningless and dropped from
+ * the key (one polar bucket, ≤ `q` across). The key holds bucket indices, and `q` is
+ * derived from the *quantized* zoom, so one key is always one region of the globe.
  */
 export function cullKeyFor(data: LodData | undefined, view: GlobeViewState): string {
   if (!data) return 'none'
   if (data.h3.length <= MAX_RENDERED_CELLS) return `${data.lod}:all`
-  const q = Math.max(0.25, halfSpanDeg(view.zoom) / 4)
-  const lng = Math.round(view.longitude / q) * q
-  const lat = Math.round(view.latitude / q) * q
-  const z = Math.round(view.zoom / 0.25) * 0.25
-  return `${data.lod}:${lng.toFixed(2)}:${lat.toFixed(2)}:${z.toFixed(2)}`
+  const zq = quantizeZoom(view.zoom)
+  const z = zq.toFixed(2)
+  const q = positionQuantum(zq)
+  const lat = Math.max(-90, Math.min(90, view.latitude))
+  if (90 - Math.abs(lat) < q / 2) return `${data.lod}:pole${lat > 0 ? 'N' : 'S'}:${z}`
+  const latIdx = Math.round(lat / q)
+  // Most equatorward latitude of this band (≤ 90 − q/2, so its cosine is ≥ sin(q/2) > 0).
+  const edge = Math.max(0, Math.abs(latIdx * q) - q / 2)
+  const qLng = q / Math.cos(edge * DEG)
+  const lng = ((((view.longitude + 180) % 360) + 360) % 360) - 180 // [-180, 180)
+  const lngIdx = Math.round(lng / qLng)
+  return `${data.lod}:${latIdx}:${lngIdx}:${z}`
 }
 
 /**
- * Frustum-approximate viewport cull for dense tiers. The coarse overview tier
- * (71k cells) renders whole; finer tiers are clipped to a zoom-scaled lng/lat
- * window and capped to the highest-population cells. (Proper H3 tiling is the
- * Sprint 2 replacement for this approximation.)
+ * Viewport cull for dense tiers. The coarse overview tier (71k cells) renders whole;
+ * finer tiers keep the cells inside a spherical cap — great-circle distance from the view
+ * center ≤ {@link cullRadiusDeg} — capped to the highest-population cells. A cap, not a
+ * lng/lat degree box: a degree of longitude shrinks by cos(lat), so a box is too narrow on
+ * the ground at high latitude and misses the far side of a pole. The cap is exact at the
+ * poles and across the antimeridian by construction.
+ *
+ * Cost (main thread, every re-cull, all 2 M mid cells): no per-cell trig on the hot path.
+ * A cell is in the cap iff `cosΔλ·cosφc·cosφ ≥ cos r − sinφc·sinφ`, i.e. iff its longitude
+ * offset Δλ ≤ Λ(φ), the cap's half-width at the cell's latitude. The latitude band
+ * `|φ − φc| ≤ r` is the first prefilter and Δλ ≤ max Λ (the cap's bounding box) the
+ * second; past both, a {@link CAP_BINS}-bin table holds, per latitude bin, a lower and an
+ * upper bound of Λ over the bin. Δλ ≤ lower → in, Δλ > upper → out, and only the thin
+ * sliver between (cells right at the cap's rim) pays the exact trig test. The table is
+ * 2 × 2048 float64 (32 KB) per re-cull; no per-cell columns are added.
  */
 export function cullForView(data: LodData | undefined, view: GlobeViewState): CullResult {
   if (!data) return { indices: null, key: 'none' }
@@ -137,18 +199,64 @@ export function cullForView(data: LodData | undefined, view: GlobeViewState): Cu
     return { indices: null, key: `${data.lod}:all` }
   }
 
-  // Scan a window 1.5× the visible half-span: wider than the re-cull quantum
-  // (halfSpan/4), so the rendered set still covers the viewport after the camera
-  // drifts up to one quantum between re-culls — no empty edges mid-drag.
-  const win = Math.min(90, 1.5 * halfSpanDeg(view.zoom))
+  const rDeg = cullRadiusDeg(view.zoom)
   const { lng, lat, population } = data
-  const cLng = view.longitude
-  const cLat = view.latitude
+  const cLat = Math.max(-90, Math.min(90, view.latitude))
+  const cLng = ((((view.longitude + 180) % 360) + 360) % 360) - 180 // [-180, 180): |Δ| ≤ 360
+  const cosR = Math.cos(rDeg * DEG)
+  const sinC = Math.sin(cLat * DEG)
+  const cosC = Math.cos(cLat * DEG)
+
+  // Cap half-width in longitude (degrees) at latitude φ: 180 when the whole parallel is
+  // inside (a pole in the cap), −1 when none of it is. Both cases are decided before the
+  // division, so a center on a pole (cosC ≈ 0) or a parallel at a pole (cosφ ≈ 0) can't
+  // divide by ~0, and acos only ever sees an argument inside [−1, 1] — no NaN.
+  const halfWidth = (phiDeg: number): number => {
+    const num = cosR - sinC * Math.sin(phiDeg * DEG)
+    const den = cosC * Math.cos(phiDeg * DEG)
+    if (num <= -den) return 180
+    if (num > den) return -1
+    return Math.acos(num / den) / DEG
+  }
+
+  const bandLo = Math.max(-90, cLat - rDeg)
+  const bandHi = Math.min(90, cLat + rDeg)
+  const binW = (bandHi - bandLo) / CAP_BINS
+  const invBinW = binW > 0 ? 1 / binW : 0
+  // Λ is unimodal in φ (0 at the band edges, peak where the cap's rim runs along a
+  // meridian, sinφ* = sinφc / cos r — or monotone up to 180 when the cap holds a pole),
+  // so its minimum over a bin is at an endpoint and its maximum at an endpoint or φ*.
+  const sPeak = sinC / cosR
+  const phiPeak = Math.abs(sPeak) < 1 ? Math.asin(sPeak) / DEG : NaN
+  const lower = new Float64Array(CAP_BINS)
+  const upper = new Float64Array(CAP_BINS)
+  let prev = halfWidth(bandLo)
+  let widest = -1 // max Λ over the band: the cap's lng/lat bounding box, a second cheap reject
+  for (let k = 0; k < CAP_BINS; k++) {
+    const a = bandLo + k * binW
+    const b = k === CAP_BINS - 1 ? bandHi : a + binW
+    const next = halfWidth(b)
+    lower[k] = Math.min(prev, next)
+    const hi = Math.max(prev, next)
+    upper[k] = phiPeak >= a && phiPeak <= b ? Math.max(hi, halfWidth(phiPeak)) : hi
+    if (upper[k] > widest) widest = upper[k]
+    prev = next
+  }
 
   const visible: number[] = []
-  for (let i = 0; i < lng.length; i++) {
-    if (Math.abs(lat[i] - cLat) <= win && lngDelta(lng[i], cLng) <= win) {
-      visible.push(i)
+  for (let i = 0; i < lat.length; i++) {
+    const phi = lat[i]
+    if (phi < bandLo || phi > bandHi) continue
+    let d = Math.abs(lng[i] - cLng)
+    if (d > 180) d = 360 - d
+    if (d > widest) continue
+    let k = ((phi - bandLo) * invBinW) | 0
+    if (k >= CAP_BINS) k = CAP_BINS - 1
+    if (d <= lower[k]) visible.push(i)
+    else if (d <= upper[k]) {
+      // Exact test for the rim sliver: cosΔλ·cosφc·cosφ ≥ cos r − sinφc·sinφ.
+      const p = phi * DEG
+      if (Math.cos(d * DEG) * cosC * Math.cos(p) >= cosR - sinC * Math.sin(p)) visible.push(i)
     }
   }
 

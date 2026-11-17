@@ -164,9 +164,16 @@ src/
     sphere. It was also perf-neutral at overview, so `H3HexagonLayer` stays on `highPrecision: 'auto'`
     (per-cell geometry, varied faces, no star). The pan wins above (picking-skip, DPR cap) carry it.
   - **Re-cull cadence** — `cullKeyFor` quantizes the camera to a zoom-relative step (`halfSpan/4`)
-    so the dense-tier cull re-runs ~5–10× less often than the old fixed 1°; `cullForView` scans a
-    `1.5×halfSpan` window (wider than the quantum, so edges don't pop) and fills the 120 k cap via
-    an O(n) quickselect (`topKByPopulation`) instead of an O(n log n) sort of ~1 M indices.
+    so the dense-tier cull re-runs ~5–10× less often than the old fixed 1°; `cullForView` keeps a
+    spherical cap whose radius (`cullRadiusDeg`) is a function of the *key* — `1.5×halfSpan` of
+    the key's zoom bucket, at least the bucket's widest viewport plus its position-bucket
+    diagonal — so the cull covers every view that reuses it, drifted in position and zoom, and fills
+    the 120 k cap via an O(n) quickselect (`topKByPopulation`) instead of an O(n log n) sort of
+    ~1 M indices. The window is a great-circle cap, not a lng/lat degree box (a box is cos(lat)
+    too narrow on the ground at high latitude and misses the far side of a pole), and the key's
+    longitude step is a ground distance (`q / cos φ`, dropped within `q/2` of a pole). The cap
+    test stays trig-free per cell: latitude band + bounding box, then a per-cull 2048-bin table
+    of the cap's half-width in longitude; only cells on the rim pay the exact test.
   - **Idle tile prefetch** — after the visible r8 tiles merge, a `requestIdleCallback` warms the
     `gridDisk` k+1 ring into the LRU cache (no `setR8Data`, so no rebuild), with visible-protecting
     eviction — so panning reveals ready tiles instead of empty gaps.

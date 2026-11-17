@@ -42,24 +42,6 @@ Ordered correctness first, then performance, then features. The three items at t
 came out of the 2026-11-17 code review; the rest are the standing queue, re-ordered so the
 boundary cache lands before the two items that rebuild cells on the path it changes.
 
-- [ ] Pole-aware viewport cull: `cullForView` (`src/lib/lod.ts`) keeps cells inside a
-      fixed lng/lat *degree* box, but a degree of longitude covers cos(lat) as much ground
-      as at the equator — at 70° N the window is a third as wide on the ground as the
-      viewport it is meant to cover (empty east/west edges), and a view near a pole misses
-      everything on the far side of it. Replace the box with a spherical-cap test (angular
-      distance from the view center ≤ the window), using the latitude band as the cheap
-      prefilter; that is exact at the poles and across the antimeridian by construction.
-      `cullKeyFor` should scale its longitude quantum the same way, so the re-cull cadence
-      stays constant in ground distance instead of thrashing as the camera nears a pole.
-      Accept: unit tests on an equal-area synthetic tier (uniform in lng and sin(lat)) show
-      (a) every selected cell lies within the window's angular radius of the view center,
-      and under the cap no cell inside it is dropped; (b) the selected count at lat 70° and
-      at lat 85° is within 15 % of lat 0° at the same zoom (today ≈ cos(lat)×); (c) a view
-      centered on a pole selects cells at every longitude; (d) the existing antimeridian,
-      top-k and cap tests still pass; and (e) a Node timing on the committed mid tier
-      (`public/data/mid.parquet`, 2 M cells) shows the cull within 1.5× of its cost before
-      the change — report both numbers.
-      Gate: verify, qa:render.
 - [ ] Tile-stream loose ends: two small defects the tick-1 checkers found in
       `src/data/tileStream.ts`. (1) A partial burst never expires — only a success clears a
       tile's failure count, so one prefetch failure ten minutes ago leaves `{count: 1}`, and
@@ -294,3 +276,45 @@ boundary cache lands before the two items that rebuild cells on the path it chan
       Node cannot import it). Left as is: two inline `wrapLng` copies in `Globe.tsx` and
       `KeyboardShortcuts.tsx`; `scripts/qa/page-probe.mjs` no longer forces the bounds in
       `setCamera`, it inherits the store's.)*
+- [x] Pole-aware viewport cull: `cullForView` (`src/lib/lod.ts`) keeps cells inside a
+      fixed lng/lat *degree* box, but a degree of longitude covers cos(lat) as much ground
+      as at the equator — at 70° N the window is a third as wide on the ground as the
+      viewport it is meant to cover (empty east/west edges), and a view near a pole misses
+      everything on the far side of it. Replace the box with a spherical-cap test (angular
+      distance from the view center ≤ the window), using the latitude band as the cheap
+      prefilter; that is exact at the poles and across the antimeridian by construction.
+      `cullKeyFor` should scale its longitude quantum the same way, so the re-cull cadence
+      stays constant in ground distance instead of thrashing as the camera nears a pole.
+      Accept: unit tests on an equal-area synthetic tier (uniform in lng and sin(lat)) show
+      (a) every selected cell lies within the window's angular radius of the view center,
+      and under the cap no cell inside it is dropped; (b) the selected count at lat 70° and
+      at lat 85° is within 15 % of lat 0° at the same zoom (today ≈ cos(lat)×); (c) a view
+      centered on a pole selects cells at every longitude; (d) the existing antimeridian,
+      top-k and cap tests still pass; and (e) a Node timing on the committed mid tier
+      (`public/data/mid.parquet`, 2 M cells) shows the cull within 1.5× of its cost before
+      the change — report both numbers.
+      Gate: verify, qa:render.
+      *(Done 2026-11-17, factory tick 4: `cullForView` keeps a great-circle cap — a
+      latitude band, a bounding-box reject and a per-cull table of the cap's longitude
+      half-width, so only rim cells pay trig; `cullKeyFor` steps longitude by ground
+      distance and drops it next to a pole. Sent back once: the key quantizes zoom, so a
+      radius taken from the triggering view left a gap of up to ~6 % of the half-span when
+      the camera zoomed out inside a bucket and moved diagonally; the radius
+      (`cullRadiusDeg`) is now a function of the key, so every view on a key is covered.
+      Evidence: 19 new tests on an equal-area synthetic tier (all fail on the old cull, the
+      17 old tests are untouched); count at lat 70° / 85° vs the equator is 0.99–1.05, was
+      0.10–0.44; the checker's own sampler found 0 uncovered among 882,504 same-key view
+      pairs and 0 cells dropped inside the cap over 13 + 22 brute-forced views (both
+      poles, antimeridian, widest window); Node timing on the 2 M-cell mid tier
+      (`node scripts/bench/cull_bench.mjs`): mean of medians 14.6–15.3 ms before, 15.0–15.2
+      ms after, worst single view 1.23×. Gate green: 125 tests, qa:render PASS, 0 console
+      errors. Two independent checkers PASSed. **The item's premise was only half right**,
+      and the first checker measured why: deck.gl's GlobeViewport scales with 1/cos(lat),
+      so the *visible* ground also shrinks toward the poles, and on a wide canvas the
+      screen reaches far past `halfSpanDeg` (1280×800, lat 0: screen edge 69° from center
+      at z3 and 36.6° at z4, against cull radii of 33.8° and 16.9°). Against real on-screen
+      coverage this tick is still a large net win (Iceland z4 52 % → 100 % of visible cells,
+      St Petersburg z4.5 59 % → 99 %, Alaska z3 26 % → 72 %) with one regression: at
+      (0°, 80° N, z3) the cap now spends the 120 k budget on cells south of the screen and
+      top-k keeps 5 of 383 visible cells, was 23. Both are the next queue item. Not
+      verified in a browser: timing on the main thread (Node/V8 only).)*
