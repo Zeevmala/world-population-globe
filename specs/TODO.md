@@ -38,9 +38,9 @@ REPORT  : evidence in the Done note + commit body; sprint summary → PROJECT_ST
 
 ## Queue
 
-Ordered correctness first, then performance, then features. The three items at the top
-came out of the 2026-11-17 code review; the rest are the standing queue, re-ordered so the
-boundary cache lands before the two items that rebuild cells on the path it changes.
+Ordered correctness first, then performance, then features. Only items that do not
+depend on the open LOD-banding decision (see **Backlog**, first entry) are queued; the
+cull-window, tile-selection, popping and cross-fade work waits there for it.
 
 - [ ] Tile-stream loose ends: two small defects the tick-1 checkers found in
       `src/data/tileStream.ts`. (1) A partial burst never expires — only a success clears a
@@ -58,6 +58,13 @@ boundary cache lands before the two items that rebuild cells on the path it chan
       current view's merged tier is complete; (c) the existing 15 tile-stream tests pass
       unchanged.
       Gate: verify, qa:render.
+- [ ] Wire the render gate into CI: run `npm run qa:render` in `.github/workflows/ci.yml`
+      against the dev server, uploading the report + screenshots as artifacts, and fail on
+      console errors, a blank canvas or a broken cell cap (the exact checks — the
+      SwiftShader stall comparison stays advisory; see `scripts/qa/render_qa.mjs`).
+      Accept: CI job green on a clean PR and red on a deliberately-broken render; runtime
+      < 10 min.
+      Gate: verify.
 - [ ] Cache H3 cell boundaries across re-culls: measured on the real mid tier, a re-cull
       at z2.5 costs ~284 ms of main-thread JS and **239 ms of that is `cellToBoundary` for
       the 120 k rendered cells** (720 k vertices) — repaid in full on every re-cull during a
@@ -73,32 +80,6 @@ boundary cache lands before the two items that rebuild cells on the path it chan
       cells, same vertices, same order) with the cache cold and warm; memory stays bounded
       under a sustained pan (the cache has a hard cap and a test for it).
       Gate: verify, qa:render.
-- [ ] Cull-boundary popping: `cullForView` swaps its 120 k top-k set on each re-cull, so
-      cells blink in/out at the window edge during a pan. Fade newly-added cells in over
-      ~150 ms, or widen the scan window and stabilize the selection between adjacent cull
-      keys (`lib/lod.ts`).
-      Accept: a unit test over a scripted pan at z 3–5 on a dense synthetic tier shows the
-      rendered set changing by no more than the cells entering/leaving the window between
-      adjacent cull keys (no interior churn), with the cap and highest-density semantics
-      preserved; a qa:render frame diff of a z 3–5 pan shows no blinking cells.
-      Gate: verify, qa:render.
-- [ ] LOD cross-fade: with encoding now continuous across tiers (density domain +
-      zoom-continuous height), the remaining seam at zoom 2.2/4.5 is purely geometric —
-      22 km hexes are replaced by 3 km hexes in one frame. Render both tiers for ~250 ms
-      at the crossing and cross-fade opacity (`layers/useGlobeLayers.ts`, driven off the
-      `activeLod` transition in `store/useGlobeStore.ts`).
-      Accept: no visible pop at either threshold in `npm run qa:render` screenshots;
-      ≤ 120 k cells/frame still holds across the fade (cap the *sum* of both layers — with
-      a unit test on the split); no frame > 100 ms of main-thread JS attributable to the
-      fade (Node timing, not a SwiftShader frame time); reduced-motion skips the fade.
-      Gate: verify, qa:render.
-- [ ] Wire the render gate into CI: run `npm run qa:render` in `.github/workflows/ci.yml`
-      against the dev server, uploading the report + screenshots as artifacts, and fail on
-      console errors, a blank canvas or a broken cell cap (the exact checks — the
-      SwiftShader stall comparison stays advisory; see `scripts/qa/render_qa.mjs`).
-      Accept: CI job green on a clean PR and red on a deliberately-broken render; runtime
-      < 10 min.
-      Gate: verify.
 - [ ] Night-lights basemap toggle: swap the dark-ocean sphere texture for NASA Black Marble
       (public domain) behind a `Controls.tsx` toggle; columns must stay legible
       (data > basemap).
@@ -108,6 +89,64 @@ boundary cache lands before the two items that rebuild cells on the path it chan
 
 ## Backlog (needs breakdown before queueing)
 
+- **DECISION NEEDED — the LOD bands switch ~3 zoom levels before their cells are visible.**
+  Measured 2026-11-17 against deck.gl 9.3's real `GlobeViewport` (1280×800, CSS px):
+  an r6 hexagon is **0.38–0.47 px** across when the mid tier switches on at zoom 2.2 and
+  does not reach 3 px until zoom ≈ 4.9–5.2; an r8 hexagon is **0.27–0.33 px** across when
+  r8 switches on at 4.5, is still only **1.5–1.9 px** at the maximum zoom of 7, and would
+  need zoom ≈ 7.7–8.0 to reach 3 px. Everything downstream is a symptom of drawing
+  sub-pixel prisms: far more cells fall on screen than the 120 k cap allows, so —
+  (1) **r8 covers a patch, not the screen.** At zoom 4.6 over Tokyo the 37 streamed tiles
+  reach ~3.3° from the center while a 900×560 canvas spans ±10°; the rest of Japan and
+  Korea render with no columns at all (`scripts/qa/out/tokyo-z4.60.png` after any gate
+  run). `lib/tiles.ts` also sizes its disk from a `parentEdgeDeg` table that is ~6× too
+  large (r3 listed as 3.4°; the real average edge is 59.8 km ≈ 0.54°). Covering that
+  screen with r8 would take ~100+ tiles and > 500 k cells — it cannot be done under the cap.
+  (2) **mid draws a truncated disc.** The cull window is 1.5 × `min(60, 180/2^zoom)`; the
+  real screen edge at lat 0 is 75° from center at zoom 2.3, 69° at zoom 3 and 36.6° at
+  zoom 4 (58° to a corner), against windows of 54.8°, 33.8° and 16.9°. Inside the window
+  top-k keeps the densest 120 k, so rural cells vanish. Toward the poles the window
+  over-selects instead (the projection scales by 1/cos(lat)): at (0°, 80° N, zoom 3) the
+  cap is spent south of the screen and 5 of 383 visible cells are drawn.
+  (3) the top-k set swaps on every re-cull (popping), each crossing replaces the whole
+  mesh with one 49× finer (the seam the cross-fade item papers over), and ~240 ms per
+  re-cull goes on boundaries for hexagons smaller than a pixel.
+  **Option A (recommended): band by on-screen cell size.** Pick the finest tier whose
+  hexagon is ≥ ~3 px: r4 from zoom ≈ 2.1–2.4, r5 ≈ 3.5–3.8, r6 ≈ 4.9–5.2, r7 ≈ 6.3–6.6,
+  r8 ≈ 7.7–8.0, and raise `maxZoom` to ~10 so a 400 m cell is ~12–15 px — legible and
+  pickable, which VISION promises and zoom 7 does not deliver. r5 and r7 are H3-parent
+  aggregations of the committed r6 / r8 (sum of population, parent centroid) — no
+  upstream download, Σ ≈ 8.03 B preserved by construction; r7 is tiled like r8. A
+  1280×800 screen then holds ≤ ~130 k cells, so the cap becomes a safety net instead of
+  a truncation, r8 streams 1–7 tiles per view, each tier step is 7× not 49×, and the
+  popping and cross-fade items mostly dissolve. Cost: two more tiers of data in the repo
+  and a different look — distinct hexagons instead of a sub-pixel texture.
+  **Option B: keep the bands, patch the symptoms.** Fit the cull window and the tile disk
+  to the real footprint, and composite r8 over mid (mid cells wherever no r8 tile is
+  loaded) so the screen is never blank. Keeps the current look, the sub-pixel geometry,
+  the truncation and the re-cull cost.
+  Either way the first building block is the same: a tested model of what GlobeView
+  shows (px per km and the visible region from zoom, latitude and canvas size), driving
+  the cull window, the tile disk and — under A — tier selection.
+- (held for the LOD decision) Cull-boundary popping: `cullForView` swaps its 120 k top-k set on each re-cull, so
+  cells blink in/out at the window edge during a pan. Fade newly-added cells in over
+  ~150 ms, or widen the scan window and stabilize the selection between adjacent cull
+  keys (`lib/lod.ts`).
+  Accept: a unit test over a scripted pan at z 3–5 on a dense synthetic tier shows the
+  rendered set changing by no more than the cells entering/leaving the window between
+  adjacent cull keys (no interior churn), with the cap and highest-density semantics
+  preserved; a qa:render frame diff of a z 3–5 pan shows no blinking cells.
+  Gate: verify, qa:render.
+- (held for the LOD decision) LOD cross-fade: with encoding now continuous across tiers (density domain +
+  zoom-continuous height), the remaining seam at zoom 2.2/4.5 is purely geometric —
+  22 km hexes are replaced by 3 km hexes in one frame. Render both tiers for ~250 ms
+  at the crossing and cross-fade opacity (`layers/useGlobeLayers.ts`, driven off the
+  `activeLod` transition in `store/useGlobeStore.ts`).
+  Accept: no visible pop at either threshold in `npm run qa:render` screenshots;
+  ≤ 120 k cells/frame still holds across the fade (cap the *sum* of both layers — with
+  a unit test on the split); no frame > 100 ms of main-thread JS attributable to the
+  fade (Node timing, not a SwiftShader frame time); reduced-motion skips the fade.
+  Gate: verify, qa:render.
 - PWA offline — app-shell SW is easy; the 502 MB tile pyramid is not. Needs a caching-scope
   decision (shell + overview only vs. visited-tile cache with eviction).
 - Time-series / population animation — needs a data-source decision. Kontur publishes a

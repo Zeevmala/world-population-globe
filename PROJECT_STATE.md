@@ -306,6 +306,71 @@ every guard while quietly regressing bandwidth. Default corrected to 3.
 Corrected in `CLAUDE.md`: r6 sums to **8,031,924,024**, not …025. Only r4 differs, and
 that is float32 rounding in the pipeline's `CAST(... AS FLOAT)` — not a data difference.
 
+## Status: Sprint 8 — the factory gets an oracle, a gate and a checker 🚧 IN PROGRESS
+
+User brief (2026-11-17): review and upgrade the project for better results, implement the
+factory, execute it on Opus 5.5.
+
+### What the review found
+- **The factory was not running.** The "factory tick" Routine this file described was not
+  among the account's scheduled tasks, and nothing had landed since 2026-09-02 — the six
+  queued items sat untouched for eleven weeks.
+- **The verifier could not see behaviour.** `npm run verify` was eslint + tsc + vite
+  build, with not one unit test: a wrong cull, a broken top-k or a stepped height profile
+  all type-check and build.
+- **The contract and the prompt disagreed** (the contract required qa:render / verify:data
+  by path; the prompt the runner pipes in only ever ran `npm run verify`), and **the maker
+  certified itself**.
+- Three defects in shipped code, all since fixed by the factory (below).
+
+### What changed
+| # | Change | State |
+|---|---|---|
+| 1 | Unit tests (vitest, Node, < 2 s) as the behavioural oracle; `verify` = eslint → tests → tsc → build. 60 tests at introduction, each of six injected bugs killed | ✅ |
+| 2 | `npm run gate` — path-scoped verifier selection in code; `npm run queue` — the one parser of `specs/TODO.md` | ✅ |
+| 3 | Maker / checker agents + `/factory` orchestration; the runner pins a model, refuses `main`, re-runs the gate itself | ✅ |
+| 4 | CI and the deploy workflow run `verify` + `verify:data` before anything publishes | ✅ |
+| 5 | Tick 1 — one failed r8 tile no longer blanks the r8 view (`869bd9bc`) | ✅ |
+| 6 | Tick 2 — a dead decode worker falls back inline instead of hanging the loader (`dcfb18ab`) | ✅ |
+| 7 | Tick 3 — deep-links: strict parsing, wrapped longitude, clamped zoom (`35f74ebc`) | ✅ |
+| 8 | Tick 4 — spherical-cap cull sized from its memo key (`6e54a1d9`) | ✅ |
+
+### What the loop is worth, measured on its first four ticks
+Every tick passed the gate on its first cut. The checker — fresh context, never shown the
+maker's report — still sent three of four back, each for a real defect a green gate could
+not see: a tile abandoned for the whole session after a ten-second outage (tick 1); a dead
+worker reported only as a warning, which would have hidden a broken worker from the render
+gate (tick 2); a window sized from the triggering view rather than its memo key, leaving a
+gap under zoom drift that the old code did not have (tick 4). Tests went 60 → 125.
+
+### The finding that outranks the queue: the LOD bands are ~3 zoom levels early
+Tick 4's checker tested the cull against deck.gl's real `GlobeViewport` rather than the
+`180/2^zoom` half-span the code assumes, and the model did not survive. Followed up with a
+direct measurement (1280×800, CSS px): an r6 hexagon is **0.38–0.47 px** across when the
+mid tier switches on at zoom 2.2; an r8 hexagon is **0.27–0.33 px** across when r8 switches
+on at 4.5 and still only **1.5–1.9 px** at the maximum zoom of 7. Drawing sub-pixel prisms
+puts far more cells on screen than the 120 k cap allows, which is the common root of the
+top-k truncation, the cull-boundary popping, the per-re-cull boundary cost and the seam at
+each crossing — and of two visible defects: at zoom 4.6 over Tokyo the r8 tier draws a
+patch around the center and leaves the rest of Japan blank (`scripts/qa/out/tokyo-z4.60.png`),
+and the mid tier draws a truncated disc covering about half the visible radius on a desktop.
+The full numbers, and the two ways forward — **A:** band by on-screen cell size (add r5 and
+r7 by H3-parent aggregation of the committed tiers, raise `maxZoom` to ~10), **B:** keep the
+bands and patch the symptoms — are the first Backlog entry in `specs/TODO.md`. **It needs a
+decision**; the items that depend on it are held there, and the queue carries only work
+that is valid either way.
+
+### Verification log (Sprint 8)
+- Gate green on every commit, run by the orchestrator: queue lint, eslint, unit tests,
+  `tsc -b`, `vite build`, `qa:render --quick` (PASS, 0 console errors, 120 k cap held).
+- Headless confirmations re-run by the orchestrator: `tile_fail.mjs` (tile aborted →
+  `activeLod=r8`, 52,306 cells, 0 unhandled rejections) and `--fail-worker` (worker script
+  aborted → `status=ready`, 71,283 cells in 17 s).
+- Not verified anywhere: behaviour on a real GPU. Every browser number here is SwiftShader;
+  the Node timings (`scripts/bench/cull_bench.mjs`) are the ones that transfer.
+- No schedule was registered: a recurring task spends tokens unattended, and whether the
+  missing Routine was removed on purpose is not something the repo can answer.
+
 ## Iteration loop
 
 Human / sprint cadence (this file is the PM log):
