@@ -42,28 +42,6 @@ Ordered correctness first, then performance, then features. Only items that do n
 depend on the open LOD-banding decision (see **Backlog**, first entry) are queued; the
 cull-window, tile-selection, popping and cross-fade work waits there for it.
 
-- [ ] Stop re-tessellating the columns on every zoom frame: `useGlobeLayers` rebuilds the
-      population layer inside a `useMemo` that depends on `elevationScale` (a new value on
-      every zoom frame) and `isDragging`, and `buildPopulationLayer`
-      (`src/layers/populationLayer.ts`) hands deck.gl a fresh `data: { length }` object on
-      each build. deck.gl diffs `data` by reference, so every zoom frame and every drag
-      start / stop is a full data change: all 120 k polygons are fetched and tessellated
-      again (≈ 110–150 ms of main-thread JS per frame even with the boundary cache warm,
-      ≈ 620–710 ms before it — `scripts/bench/boundary_bench.mjs`), although only a uniform
-      (`elevationScale`) or a flag (`pickable`) changed. The comment in the layer already
-      claims "a zoom change costs one uniform write"; make it true: keep the `data` object
-      (and anything else deck.gl compares by identity) stable for as long as the cull is
-      unchanged, so a zoom frame updates `elevationScale` only. Found by the tick-6 maker.
-      Accept: unit tests on real deck.gl layer instances prove (a) two builds that differ
-      only in `elevationScale`, or only in `pickable`, share the same `data` object and
-      report no data change and no `getPolygon` / `getElevation` / `getFillColor` trigger
-      change when diffed the way deck.gl diffs props (use deck.gl's own prop diff, not a
-      re-implementation); (b) a build after the cull key or the tier changed does report a
-      data change; (c) hover still maps `info.index` through the current cull indices after
-      a zoom-only update (no stale closure over an old cull); and (d) a count of
-      `getPolygon` calls across a scripted zoom of 30 frames inside one cull key is 0 after
-      the first build (it is 30 × 3 × cells today) — reported before and after.
-      Gate: verify, qa:render.
 - [ ] Night-lights basemap toggle: swap the dark-ocean sphere texture for NASA Black Marble
       (public domain) behind a `Controls.tsx` toggle; columns must stay legible
       (data > basemap).
@@ -428,3 +406,40 @@ cull-window, tile-selection, popping and cross-fade work waits there for it.
       population layer is built; `useGlobeLayers` still rebuilds the layer on every zoom
       frame and drag start/stop (a new `data` object each build) — the rebuilds are now
       cache hits, but a stable data object would remove them and is worth an item.)*
+- [x] Stop re-tessellating the columns on every zoom frame: `useGlobeLayers` rebuilds the
+      population layer inside a `useMemo` that depends on `elevationScale` (a new value on
+      every zoom frame) and `isDragging`, and `buildPopulationLayer`
+      (`src/layers/populationLayer.ts`) hands deck.gl a fresh `data: { length }` object on
+      each build. deck.gl diffs `data` by reference, so every zoom frame and every drag
+      start / stop is a full data change: all 120 k polygons are fetched and tessellated
+      again (≈ 110–150 ms of main-thread JS per frame even with the boundary cache warm,
+      ≈ 620–710 ms before it — `scripts/bench/boundary_bench.mjs`), although only a uniform
+      (`elevationScale`) or a flag (`pickable`) changed. The comment in the layer already
+      claims "a zoom change costs one uniform write"; make it true: keep the `data` object
+      (and anything else deck.gl compares by identity) stable for as long as the cull is
+      unchanged, so a zoom frame updates `elevationScale` only. Found by the tick-6 maker.
+      Accept: unit tests on real deck.gl layer instances prove (a) two builds that differ
+      only in `elevationScale`, or only in `pickable`, share the same `data` object and
+      report no data change and no `getPolygon` / `getElevation` / `getFillColor` trigger
+      change when diffed the way deck.gl diffs props (use deck.gl's own prop diff, not a
+      re-implementation); (b) a build after the cull key or the tier changed does report a
+      data change; (c) hover still maps `info.index` through the current cull indices after
+      a zoom-only update (no stale closure over an old cull); and (d) a count of
+      `getPolygon` calls across a scripted zoom of 30 frames inside one cull key is 0 after
+      the first build (it is 30 × 3 × cells today) — reported before and after.
+      Gate: verify, qa:render.
+      *(Done 2026-11-17, factory tick 7: `buildPopulationLayer` now hands deck.gl one
+      `{length}` container per (tier object, cull indices), held weakly, instead of a fresh
+      one per build; the hook did not need to change. A zoom frame therefore diffs as
+      `elevationScale` only and a drag start / stop as `pickable` only, while a re-cull, an
+      r8 tile merge, a tier switch or a density-domain change still forces the full update.
+      Evidence: 4 tests on real deck.gl layer instances through deck.gl's own `diffProps`
+      and update path — a 30-frame zoom inside one cull key costs 0 `getPolygon` calls, was
+      13,500 for 150 cells (30 × 3 × cells; re-measured by the checker: 13,500 → 0 and
+      16,920 → 0 on a whole tier). In the real page (`node scripts/qa/zoom_rebuild.mjs`,
+      run by the orchestrator on the 120 k-cell mid tier): 10 zoom-only frames → 0
+      re-tessellations, same data object, `elevationScale` 245,459 → 260,445; an 18° pan →
+      exactly 1, new data object; 0 console errors. Gate green: 150 tests, qa:render PASS,
+      the r8 screenshots still pixel-identical. Checker PASS first time. Not measured: the
+      frame-time saving in ms on real hardware — the item's 110–150 ms figure is the Node
+      cost of one rebuild, which each zoom frame no longer pays.)*

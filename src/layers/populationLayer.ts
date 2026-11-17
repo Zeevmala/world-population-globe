@@ -21,6 +21,30 @@ export const POPULATION_MATERIAL = {
 let sessionBoundaries: BoundaryCache | null = null
 const boundaries = () => (sessionBoundaries ??= new BoundaryCache())
 
+type DataContainer = { length: number }
+
+// deck.gl diffs `data` by reference: a new container is a full data change — every
+// boundary fetched and tessellated again, every attribute rebuilt. The layer is rebuilt
+// on every zoom frame (new `elevationScale`) and drag start/stop (new `pickable`), so the
+// container must outlive the instance: one per (tier object, cull indices), which are
+// exactly what the geometry depends on. A new cull, an r8 tile merge (new `LodData`) or a
+// tier switch gets a new container, hence a data change; nothing else does. Restyles (the
+// density domain) go through `updateTriggers`. Weak on both keys: a container never keeps
+// a tier or a cull alive once the app has dropped it.
+const containers = new WeakMap<
+  LodData,
+  { whole: DataContainer | null; culled: WeakMap<Uint32Array, DataContainer> }
+>()
+
+function dataContainer(data: LodData, indices: Uint32Array | null): DataContainer {
+  let byTier = containers.get(data)
+  if (!byTier) containers.set(data, (byTier = { whole: null, culled: new WeakMap() }))
+  if (!indices) return (byTier.whole ??= { length: data.population.length })
+  let c = byTier.culled.get(indices)
+  if (!c) byTier.culled.set(indices, (c = { length: indices.length }))
+  return c
+}
+
 /**
  * The population columns: one extruded `PolygonLayer` with each cell's true H3 geometry.
  *
@@ -63,15 +87,18 @@ export function buildPopulationLayer(
   const areaKm2 = cellAreaKm2(h3Res)
   const normAt = (i: number) => norm(population[i] / areaKm2)
   const srcOf = (renderIndex: number) => (indices ? indices[renderIndex] : renderIndex)
-  const count = indices ? indices.length : population.length
   // The packed index column as uint32 word pairs — the cache key, no strings built.
   const words = h3Words(h3.packed)
 
   // Non-iterable data ({length}) + index-based accessors: deck.gl iterates
   // indices without materializing per-cell objects, so 2M-cell tiers stay cheap.
+  // The container is stable per (tier, cull) — see `dataContainer`. The accessors and
+  // `onHover` below are fresh closures every build, which is safe: deck.gl's prop diff
+  // ignores accessor and callback identity (it only reads the current instance's), and
+  // they close over the same `data` / `indices` the container is keyed on.
   return new PolygonLayer({
     id: 'population',
-    data: { length: count },
+    data: dataContainer(data, indices),
     extruded: true,
     // Off while dragging: a pickable layer re-renders the picking buffer on every
     // pointermove, doubling per-frame GPU work during a pan. Hover resumes on release.

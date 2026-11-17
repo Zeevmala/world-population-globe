@@ -8,8 +8,13 @@ import { cellToLatLng, gridDisk, latLngToCell } from 'h3-js'
 // deck.gl's own layer-index resolver (not a package export) — what the draw pass feeds
 // `getPolygonOffset` as `layerIndex`.
 import { layerIndexResolver } from '../../node_modules/@deck.gl/core/dist/passes/layers-pass.js'
+// deck.gl's prop diff — what decides `dataChanged` / `updateTriggersChanged` for a new instance.
+import { diffProps } from '../../node_modules/@deck.gl/core/dist/lifecycle/props.js'
+// The fill sublayer's tesselator (not a package export) — the other `getPolygon` caller.
+import PolygonTesselator from '../../node_modules/@deck.gl/layers/dist/solid-polygon-layer/polygon-tesselator.js'
 import { h3Column, packH3 } from '../data/h3Column'
 import { BoundaryCache } from '../lib/h3Boundary'
+import { maxColumnHeightM } from '../lib/scales'
 import { rng } from '../test/fixtures'
 import type { LodData } from '../types'
 import { POPULATION_MATERIAL, buildPopulationLayer } from './populationLayer'
@@ -207,5 +212,148 @@ describe('population layer', () => {
     )
     onHover({ index: -1 })
     expect(setHover).toHaveBeenLastCalledWith(null)
+  })
+})
+
+/**
+ * What deck.gl does with each new population layer instance, minus the GPU: its own prop
+ * diff (`diffProps`), then the real `PolygonLayer.updateState` (→ `_getPaths`) and, on the
+ * fill sublayer it renders, the real `SolidPolygonLayer.updateGeometry` (→ the
+ * `PolygonTesselator`). Those are every place `getPolygon` is called on an update, so a
+ * spy on the boundary cache counts exactly the boundary work a frame pays.
+ */
+function deckUpdater(viewport: InstanceType<typeof GlobeViewport>) {
+  type Internals = {
+    props: Record<string, unknown>
+    state: Record<string, unknown>
+    context: unknown
+    renderLayers(): unknown
+    updateState(p: unknown): void
+    updateGeometry(p: unknown): void
+  }
+  let prev: Internals | null = null
+  let prevFill: Internals | null = null
+  return (layer: Layer) => {
+    const top = layer as unknown as Internals
+    top.context = { viewport }
+    top.state = prev ? prev.state : {} // `_transferState`: the state moves to the new instance
+    const flags = diffProps(top.props, prev ? prev.props : null)
+    top.updateState({ props: top.props, oldProps: prev?.props ?? {}, changeFlags: flags, context: top.context })
+    const fill = ([top.renderLayers()].flat(Infinity) as (Internals & { id: string })[]).find((l) =>
+      Boolean(l) && l.id.endsWith('-fill'),
+    )!
+    fill.context = { viewport }
+    fill.state = prevFill
+      ? prevFill.state
+      : {
+          polygonTesselator: new PolygonTesselator({
+            preproject: viewport.projectFlat.bind(viewport),
+            fp64: false,
+            IndexType: Uint32Array,
+          }),
+        }
+    const fillFlags = diffProps(fill.props, prevFill ? prevFill.props : null)
+    fill.updateGeometry({ props: fill.props, oldProps: prevFill?.props ?? {}, changeFlags: fillFlags })
+    prev = top
+    prevFill = fill
+    return { flags, fillFlags }
+  }
+}
+
+describe('population layer updates (deck.gl prop diff)', () => {
+  const data = h3Lod()
+  const cullA = { key: 'mid:3:9:3.00', indices: Uint32Array.from({ length: 150 }, (_, k) => (k * 37) % data.h3.length) }
+  const cullB = { key: 'mid:3:10:3.00', indices: Uint32Array.from({ length: 140 }, (_, k) => (k * 41) % data.h3.length) }
+  const DOMAIN = 4000
+  const build = (
+    lod: LodData,
+    cull: { key: string; indices: Uint32Array | null },
+    { zoom = 3, pickable = true, domainMax = DOMAIN, setHover = vi.fn(), cache = new BoundaryCache(1024) } = {},
+  ) =>
+    buildPopulationLayer(
+      lod,
+      cull.indices,
+      `${cull.key}|${Math.round(domainMax)}`,
+      pickable,
+      domainMax,
+      maxColumnHeightM(zoom),
+      setHover,
+      cache,
+    )
+  const diff = (next: Layer, prev: Layer) => diffProps(next.props, prev.props)
+  const ACCESSORS = ['getPolygon', 'getElevation', 'getFillColor'] as const
+  const triggersHit = (f: ReturnType<typeof diffProps>) =>
+    ACCESSORS.filter((k) => f.updateTriggersChanged && (f.updateTriggersChanged.all || f.updateTriggersChanged[k]))
+
+  it('(a) a zoom-only or pickable-only rebuild keeps the data container and fires no trigger', () => {
+    for (const cull of [cullA, { key: 'mid:all', indices: null }]) {
+      const first = build(data, cull, { zoom: 3 })
+      for (const next of [build(data, cull, { zoom: 3.1 }), build(data, cull, { pickable: false })]) {
+        expect(next.props.data).toBe(first.props.data)
+        const f = diff(next, first)
+        expect(f.dataChanged).toBe(false)
+        expect(triggersHit(f)).toEqual([])
+        // What did change is a uniform or a flag, nothing that touches a buffer.
+        expect(f.propsChanged).toMatch(/^props\.(elevationScale|pickable) /)
+      }
+    }
+  })
+
+  it('(b) a new cull, a new tier object at the same key, or another tier is a data change', () => {
+    const first = build(data, cullA)
+    expect(diff(build(data, cullB), first).dataChanged).toBeTruthy()
+    // An r8 tile merge: a new LodData under an unchanged cull key string.
+    const merged: LodData = { ...data }
+    expect(diff(build(merged, { ...cullA, indices: cullA.indices.slice() }), first).dataChanged).toBeTruthy()
+    expect(diff(build(merged, { key: 'mid:all', indices: null }), build(data, { key: 'mid:all', indices: null })).dataChanged).toBeTruthy()
+    // Another tier, whole.
+    expect(diff(build({ ...data, lod: 'overview' }, { key: 'overview:all', indices: null }), first).dataChanged).toBeTruthy()
+    // The density domain (manifest load) restyles: a trigger change for every accessor.
+    expect(triggersHit(diff(build(data, cullA, { domainMax: 9000 }), first))).toEqual([...ACCESSORS])
+  })
+
+  it('(c) hover maps through the current cull after a zoom-only update and after a re-cull', () => {
+    const setHover = vi.fn()
+    build(data, cullA, { zoom: 3, setHover })
+    const zoomed = build(data, cullA, { zoom: 3.1, setHover })
+    const hover = (l: Layer, index: number) => (l.props.onHover as (i: { index: number }) => void)({ index })
+    hover(zoomed, 5)
+    expect(setHover).toHaveBeenLastCalledWith(expect.objectContaining({ h3: data.h3.at(cullA.indices[5]) }))
+    const recut = build(data, cullB, { zoom: 3.1, setHover })
+    hover(recut, 5)
+    expect(setHover).toHaveBeenLastCalledWith(expect.objectContaining({ h3: data.h3.at(cullB.indices[5]) }))
+    // And back to the first cull's indices: the container follows the cull, not the history.
+    const back = build(data, cullA, { zoom: 3.05, setHover })
+    expect(back.props.data).toBe(zoomed.props.data)
+    hover(back, 7)
+    expect(setHover).toHaveBeenLastCalledWith(expect.objectContaining({ h3: data.h3.at(cullA.indices[7]) }))
+  })
+
+  it('(d) a 30-frame zoom inside one cull key fetches no boundary after the first build', () => {
+    const viewport = new GlobeViewport({ width: 1280, height: 800, longitude: 77, latitude: 28, zoom: 3 })
+    for (const cull of [cullA, { key: 'mid:all', indices: null }]) {
+      const cache = new BoundaryCache(1024)
+      const polygon = vi.spyOn(cache, 'polygon')
+      const update = deckUpdater(viewport)
+      const cells = cull.indices ? cull.indices.length : data.h3.length
+      const first = update(build(data, cull, { zoom: 2.9, cache }))
+      expect(first.flags.dataChanged).toBeTruthy()
+      expect(polygon).toHaveBeenCalledTimes(3 * cells) // `_getPaths` + the tesselator's two passes
+      polygon.mockClear()
+      for (let f = 1; f <= 30; f++) {
+        const zoom = 2.9 + (0.2 * f) / 30 // inside the key's ±0.125 zoom bucket
+        const { flags, fillFlags } = update(build(data, cull, { zoom, pickable: f % 7 !== 0, cache }))
+        expect([f, flags.dataChanged, fillFlags.dataChanged]).toEqual([f, false, false])
+        expect([f, triggersHit(flags), triggersHit(fillFlags)]).toEqual([f, [], []])
+      }
+      // Before the stable container: 30 × 3 × cells (13,500 for the culled 150).
+      expect(polygon).toHaveBeenCalledTimes(0)
+      if (cull.indices) {
+        // The next re-cull through the same updater is a full geometry update again.
+        const recut = update(build(data, cullB, { zoom: 3.1, cache }))
+        expect(recut.flags.dataChanged).toBeTruthy()
+        expect(polygon).toHaveBeenCalledTimes(3 * cullB.indices.length)
+      }
+    }
   })
 })
