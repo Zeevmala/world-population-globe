@@ -13,7 +13,14 @@ import type { LodData, TileIndex } from '../types'
  * {@link TILE_RETRY_COOLDOWN_MS} after its last failure, after which it is eligible for
  * a fresh burst. So a dead tile costs at most 3 requests per cool-down, never a tight
  * loop, and a short outage cannot leave a permanent hole: the tile comes back once the
- * network does. A successful load clears the tile's record entirely.
+ * network does. A successful load clears the tile's record entirely, and a record older
+ * than the cool-down is stale: the next failure starts a fresh burst (full budget, one
+ * warning) rather than resuming a burst that ended long ago.
+ *
+ * Eviction protects the *current* view — the visible set of the latest `loadVisible`
+ * call — whoever triggers it, so a late tile from an abandoned run can never evict a
+ * tile the current view just loaded (that tile would have no failure record, so no
+ * retry timer would ever bring it back).
  */
 
 /** A cached tile's columns. `h3` stays packed so merging is a typed-array copy. */
@@ -90,7 +97,7 @@ export function selectTiles(
 /** Evict least-recently-used tiles past `max`, never one in `protect` (visible). */
 export function evictLru(
   cache: Map<string, TileCols>,
-  protect: ReadonlySet<string>,
+  protect: { has(key: string): boolean },
   max: number = TILE_CACHE_MAX,
 ): void {
   while (cache.size > max) {
@@ -170,6 +177,8 @@ export class TileStream {
   readonly cache = new Map<string, TileCols>()
   private readonly inflight = new Map<string, Promise<TileCols>>()
   private readonly failures = new Map<string, TileFailure>()
+  /** The current view's visible set: the `wanted` of the latest `loadVisible` call. */
+  private visible: ReadonlySet<string> = new Set()
   private readonly maxTiles: number
   private readonly maxAttempts: number
   private readonly cooldownMs: number
@@ -211,6 +220,7 @@ export class TileStream {
   private fetchTile(p: string): Promise<TileCols> {
     const pending = this.inflight.get(p)
     if (pending) return pending
+    const startedAt = this.now()
     const job = this.load(this.files.get(p)!)
       .then(
         (cols) => {
@@ -219,9 +229,12 @@ export class TileStream {
         },
         (err: unknown) => {
           // A spent burst being tried again (it was only selectable past the
-          // cool-down) starts a new burst with a fresh budget.
+          // cool-down) starts a new burst with a fresh budget — and so does a partial
+          // burst whose last failure is a cool-down or more older than this attempt.
+          // The record cannot change while this attempt is in flight (one per tile).
           const prev = this.failures.get(p)
-          const n = prev && prev.count < this.maxAttempts ? prev.count + 1 : 1
+          const n =
+            prev && prev.count < this.maxAttempts && startedAt - prev.lastAt < this.cooldownMs ? prev.count + 1 : 1
           this.failures.set(p, { count: n, lastAt: this.now() })
           // One warning per burst: the first failure says what will happen next; the
           // follow-up attempts of the same burst stay quiet.
@@ -241,7 +254,9 @@ export class TileStream {
 
   /**
    * Make `p` resident: bump LRU recency on a hit, else fetch (deduped) and insert,
-   * evicting LRU tiles that aren't in `protect`. Rejects if the fetch fails.
+   * evicting LRU tiles that are neither in `protect` nor in the current view's visible
+   * set — read when the tile arrives, not when it was requested, so a load that
+   * outlived its view cannot evict the view that replaced it. Rejects if the fetch fails.
    */
   async ensure(p: string, protect: ReadonlySet<string>): Promise<void> {
     const hit = this.cache.get(p)
@@ -252,14 +267,19 @@ export class TileStream {
     }
     const cols = await this.fetchTile(p)
     this.cache.set(p, cols)
-    evictLru(this.cache, protect, this.maxTiles)
+    const visible = this.visible
+    evictLru(this.cache, { has: (k) => visible.has(k) || protect.has(k) }, this.maxTiles)
   }
 
   /** Load the visible `candidates` and merge whatever loaded — never rejects. */
   async loadVisible(candidates: readonly string[]): Promise<VisibleLoad> {
     const wanted = this.select(candidates)
-    const protect = new Set(wanted)
-    const settled = await Promise.allSettled(wanted.map((p) => this.ensure(p, protect)))
+    // This call is now the current view: every later eviction protects its set, and
+    // its own loads add no protection of their own (once a newer view takes over they
+    // are stale, and must not pin this set against it).
+    this.visible = new Set(wanted)
+    const none: ReadonlySet<string> = new Set()
+    const settled = await Promise.allSettled(wanted.map((p) => this.ensure(p, none)))
     const loaded = wanted.filter((p) => this.cache.has(p))
     const failed = wanted.filter(
       (p, i) => settled[i].status === 'rejected' && this.failureCount(p) < this.maxAttempts,

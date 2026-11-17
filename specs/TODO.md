@@ -42,22 +42,6 @@ Ordered correctness first, then performance, then features. Only items that do n
 depend on the open LOD-banding decision (see **Backlog**, first entry) are queued; the
 cull-window, tile-selection, popping and cross-fade work waits there for it.
 
-- [ ] Tile-stream loose ends: two small defects the tick-1 checkers found in
-      `src/data/tileStream.ts`. (1) A partial burst never expires — only a success clears a
-      tile's failure count, so one prefetch failure ten minutes ago leaves `{count: 1}`, and
-      when the tile later becomes visible and fails it resumes at count 2 with no warning
-      and a shortened budget; a record older than the cool-down should start a new burst.
-      (2) An abandoned run's in-flight load still evicts under its *old* `protect` set, so
-      with more than 64 resident tiles it can evict a tile the current view just loaded —
-      and that tile has no failure record, so no timer re-requests it and the hole lasts
-      until the next view-key change (this predates tick 1). Evict against the current
-      view's protect set, or re-check the visible set after an eviction.
-      Accept: unit tests prove (a) a failure record older than the cool-down is treated as
-      a fresh burst — full budget, one warning; (b) with the cache at its cap, a stale
-      run's late-arriving tile never evicts a tile of the current visible set, and the
-      current view's merged tier is complete; (c) the existing 15 tile-stream tests pass
-      unchanged.
-      Gate: verify, qa:render.
 - [ ] Wire the render gate into CI: run `npm run qa:render` in `.github/workflows/ci.yml`
       against the dev server, uploading the report + screenshots as artifacts, and fail on
       console errors, a blank canvas or a broken cell cap (the exact checks — the
@@ -357,3 +341,34 @@ cull-window, tile-selection, popping and cross-fade work waits there for it.
       (0°, 80° N, z3) the cap now spends the 120 k budget on cells south of the screen and
       top-k keeps 5 of 383 visible cells, was 23. Both are the next queue item. Not
       verified in a browser: timing on the main thread (Node/V8 only).)*
+- [x] Tile-stream loose ends: two small defects the tick-1 checkers found in
+      `src/data/tileStream.ts`. (1) A partial burst never expires — only a success clears a
+      tile's failure count, so one prefetch failure ten minutes ago leaves `{count: 1}`, and
+      when the tile later becomes visible and fails it resumes at count 2 with no warning
+      and a shortened budget; a record older than the cool-down should start a new burst.
+      (2) An abandoned run's in-flight load still evicts under its *old* `protect` set, so
+      with more than 64 resident tiles it can evict a tile the current view just loaded —
+      and that tile has no failure record, so no timer re-requests it and the hole lasts
+      until the next view-key change (this predates tick 1). Evict against the current
+      view's protect set, or re-check the visible set after an eviction.
+      Accept: unit tests prove (a) a failure record older than the cool-down is treated as
+      a fresh burst — full budget, one warning; (b) with the cache at its cap, a stale
+      run's late-arriving tile never evicts a tile of the current visible set, and the
+      current view's merged tier is complete; (c) the existing 15 tile-stream tests pass
+      unchanged.
+      Gate: verify, qa:render.
+      *(Done 2026-11-17, factory tick 5: (1) a failure continues a burst only if the
+      previous one is inside the cool-down and under the bound, otherwise it starts a
+      fresh burst — the same boundary `tileEligible` uses; (2) `TileStream` remembers the
+      visible set of the latest `loadVisible` and every eviction protects it, read when
+      the tile arrives rather than when its run started. The hook did not need to change.
+      Evidence: 10 new tests (9 fail on the old module); the 15 existing cases are
+      byte-for-byte unchanged; the checker's own interleavings pass, including a 150-step
+      pan with late arrivals from every earlier view (cache stays bounded, ends ≤ 64) and
+      A → B → A with A's first run still in flight. Gate green: 135 tests, qa:render PASS,
+      0 console errors. Headless re-runs by the orchestrator: `tile_fail.mjs` PASS
+      (52,306 r8 cells with the Tokyo tile aborted) and `--fail-times 1` PASS (the tile
+      recovers, 65,892 cells) — the recovery case is now first-hand. Checker PASS first
+      time. Known, bounded: a stale prefetch can hold the cache above its cap by its old
+      protect set until the next eviction; an attempt that starts just inside the
+      cool-down and fails after it continues the old burst.)*

@@ -305,3 +305,163 @@ describe('TileStream — cool-down after a spent burst', () => {
     expect(warn).toHaveBeenCalledTimes(BURSTS)
   })
 })
+
+describe('TileStream — a partial burst expires after the cool-down', () => {
+  /** One failure on `p0` through `how`, then the clock moves `age` ms on. */
+  async function stalePartial(how: 'visible' | 'prefetch', age: number) {
+    const h = harness(1, () => true)
+    if (how === 'visible') await h.stream.loadVisible([parent(0)])
+    else await h.stream.prefetch([parent(0)], new Set())
+    expect(h.stream.failureCount(parent(0))).toBe(1)
+    expect(h.warn).toHaveBeenCalledTimes(1)
+    h.clock.t += age
+    return h
+  }
+
+  for (const first of ['visible', 'prefetch'] as const) {
+    for (const then of ['visible', 'prefetch'] as const) {
+      it(`(a) ${first} failure, then a ${then} failure at the cool-down boundary: −1 ms continues, 0 / +1 ms is a fresh burst`, async () => {
+        const again = (s: TileStream) =>
+          then === 'visible' ? s.loadVisible([parent(0)]) : s.prefetch([parent(0)], new Set())
+
+        const before = await stalePartial(first, TILE_RETRY_COOLDOWN_MS - 1)
+        await again(before.stream)
+        expect(before.stream.failureCount(parent(0))).toBe(2) // same burst
+        expect(before.warn).toHaveBeenCalledTimes(1)
+
+        for (const age of [TILE_RETRY_COOLDOWN_MS, TILE_RETRY_COOLDOWN_MS + 1]) {
+          const h = await stalePartial(first, age)
+          await again(h.stream)
+          expect(h.stream.failureCount(parent(0))).toBe(1) // fresh burst
+          expect(h.warn).toHaveBeenCalledTimes(2) // its one warning
+        }
+      })
+    }
+  }
+
+  it('(a) the fresh burst after a stale record gets the full budget and warns exactly once', async () => {
+    const { stream, calls, warn, clock } = await stalePartial('prefetch', 10 * TILE_RETRY_COOLDOWN_MS)
+    const delays: (number | null)[] = []
+    const failed: string[][] = []
+    for (let i = 0; i < TILE_MAX_ATTEMPTS + 2; i++) {
+      const res = await stream.loadVisible([parent(0)])
+      delays.push(res.retryInMs)
+      failed.push(res.failed)
+      clock.t += 100
+    }
+    // 1 stale attempt + a full burst, then resting.
+    expect(calls.get(0)).toBe(1 + TILE_MAX_ATTEMPTS)
+    expect(delays.slice(0, TILE_MAX_ATTEMPTS - 1)).toEqual(
+      Array.from({ length: TILE_MAX_ATTEMPTS - 1 }, (_, i) => retryDelayMs(i + 1)),
+    )
+    expect(failed.slice(0, TILE_MAX_ATTEMPTS - 1).every((f) => f.length === 1)).toBe(true)
+    expect(failed.slice(TILE_MAX_ATTEMPTS - 1).every((f) => f.length === 0)).toBe(true)
+    expect(warn).toHaveBeenCalledTimes(2) // the stale burst's and the fresh burst's
+  })
+})
+
+/** A loader whose every request waits until the test releases that tile. */
+function heldHarness(count: number) {
+  const pending = new Map<number, Array<() => void>>()
+  const held = new Set<number>()
+  const load = vi.fn<LoadTile>((file) => {
+    const k = Number(file.slice(1, file.indexOf('.')))
+    if (!held.has(k)) return Promise.resolve(tile(k, 1))
+    return new Promise<TileCols>((resolve) => {
+      pending.set(k, [...(pending.get(k) ?? []), () => resolve(tile(k, 1))])
+    })
+  })
+  /** Release every held request for `k` (synchronously, in call order). */
+  const release = (k: number) => {
+    held.delete(k)
+    for (const r of pending.get(k) ?? []) r()
+    pending.delete(k)
+  }
+  const stream = new TileStream(index(count), load, { warn: vi.fn(), now: () => 1_000_000 })
+  return { stream, load, held, release }
+}
+
+/** Let every queued promise continuation run. */
+const settle = () => new Promise<void>((r) => setTimeout(r, 0))
+
+describe('TileStream — a stale run never evicts the current view', () => {
+  const M = TILE_CACHE_MAX
+  const viewB = Array.from({ length: M }, (_, k) => parent(k))
+  const STALE = M + 5
+
+  it('(b) a stale visible load arriving after the current view is published', async () => {
+    const { stream, load, held, release } = heldHarness(M + 10)
+    held.add(STALE)
+    const a = stream.loadVisible([parent(STALE)]) // view A: still in flight
+    const b = await stream.loadVisible(viewB) // view B fills the cache to the cap
+    expect(b.loaded).toEqual(viewB)
+    expect(stream.cache.size).toBe(M)
+
+    release(STALE)
+    await a
+    for (const p of viewB) expect(stream.cache.has(p)).toBe(true)
+    expect(stream.cache.size).toBeLessThanOrEqual(M)
+    // The current view is still complete without another request.
+    const calls = load.mock.calls.length
+    const again = await stream.loadVisible(viewB)
+    expect(again.loaded).toEqual(viewB)
+    expect(load.mock.calls.length).toBe(calls)
+  })
+
+  it('(b) a stale visible load arriving before the current view is merged', async () => {
+    const { stream, held, release } = heldHarness(M + 10)
+    held.add(STALE)
+    held.add(M - 1)
+    const a = stream.loadVisible([parent(STALE)])
+    const bp = stream.loadVisible(viewB)
+    await settle()
+    expect(stream.cache.size).toBe(M - 1)
+    // B's last tile lands (cache at the cap), then A's in the same turn, before B merges.
+    release(M - 1)
+    release(STALE)
+    const b = await bp
+    await a
+    expect(b.loaded).toEqual(viewB)
+    expect(b.data!.h3.length).toBe(M)
+    for (const p of viewB) expect(stream.cache.has(p)).toBe(true)
+    expect(stream.cache.size).toBeLessThanOrEqual(M)
+  })
+
+  it('(b) a stale prefetch (protecting the old view) arriving after the current view loaded', async () => {
+    const { stream, held, release } = heldHarness(M + 10)
+    held.add(STALE)
+    const oldVisible = new Set([parent(M + 1)])
+    const pf = stream.prefetch([parent(STALE)], oldVisible)
+    const b = await stream.loadVisible(viewB)
+    expect(b.loaded).toEqual(viewB)
+    release(STALE)
+    await pf
+    for (const p of viewB) expect(stream.cache.has(p)).toBe(true)
+    expect(stream.cache.size).toBeLessThanOrEqual(M)
+  })
+
+  it('(b) a tile wanted by the stale run and the current one is fetched once and stays', async () => {
+    const { stream, load, held, release } = heldHarness(M + 10)
+    held.add(0)
+    const a = stream.loadVisible([parent(0), parent(STALE)])
+    const bp = stream.loadVisible(viewB)
+    await settle()
+    release(0)
+    const [ra, rb] = await Promise.all([a, bp])
+    expect(load.mock.calls.filter(([f]) => f === 'f0.parquet')).toHaveLength(1)
+    expect(rb.loaded).toEqual(viewB)
+    expect(ra.loaded).toContain(parent(0))
+    for (const p of viewB) expect(stream.cache.has(p)).toBe(true)
+    expect(stream.cache.size).toBeLessThanOrEqual(M)
+  })
+
+  it('(b) the old view becomes evictable once a new view loads — protection does not pin the cache', async () => {
+    const { stream } = heldHarness(2 * M)
+    await stream.loadVisible(viewB)
+    const viewC = Array.from({ length: M }, (_, k) => parent(M + k))
+    const c = await stream.loadVisible(viewC)
+    expect(c.loaded).toEqual(viewC)
+    expect(stream.cache.size).toBe(M)
+    expect([...stream.cache.keys()]).toEqual(viewC)
+  })
+})
