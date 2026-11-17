@@ -1,3 +1,4 @@
+import { MAX_ZOOM, MIN_ZOOM } from '../lib/camera'
 import { useGlobeStore } from '../store/useGlobeStore'
 import { HudButton } from './HudButton'
 import {
@@ -150,8 +151,8 @@ export function Controls({ onShowHelp, onShare, shareState }: ControlsProps) {
   const activeLod = useGlobeStore((s) => s.activeLod)
   // Primitive selectors: the rail re-renders on zoom, not on every rotation frame.
   const zoom = useGlobeStore((s) => s.viewState.zoom)
-  const minZoom = useGlobeStore((s) => s.viewState.minZoom ?? -1)
-  const maxZoom = useGlobeStore((s) => s.viewState.maxZoom ?? 7)
+  const minZoom = useGlobeStore((s) => s.viewState.minZoom ?? MIN_ZOOM)
+  const maxZoom = useGlobeStore((s) => s.viewState.maxZoom ?? MAX_ZOOM)
 
   const bands = manifest ? bandsFor(manifest.lods, minZoom, maxZoom) : []
 

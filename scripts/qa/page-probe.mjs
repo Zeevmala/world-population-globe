@@ -214,8 +214,7 @@ export function setCamera(target) {
     longitude: target.longitude,
     latitude: target.latitude,
     zoom: target.zoom,
-    minZoom: -1,
-    maxZoom: 7,
+    // minZoom / maxZoom come from the store's own view (src/lib/camera.ts) via the spread.
   })
   return performance.now()
 }

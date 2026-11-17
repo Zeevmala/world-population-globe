@@ -42,17 +42,6 @@ Ordered correctness first, then performance, then features. The three items at t
 came out of the 2026-11-17 code review; the rest are the standing queue, re-ordered so the
 boundary cache lands before the two items that rebuild cells on the path it changes.
 
-- [ ] Deep-link parsing accepts garbage: `parseHash('#//')` returns `{0, 0, 0}`
-      (`Number('')` is 0, so empty components pass the finite check), `#0/0/999` seeds a
-      zoom far outside the view's `[minZoom, maxZoom]` (a blank screen from a shared URL),
-      and longitude is unbounded. In `src/lib/urlState.ts`: reject empty or whitespace
-      components, wrap longitude into [−180, 180), clamp zoom to the camera's real bounds —
-      which today are literals in `store/useGlobeStore.ts`; export them from one place
-      instead of repeating them.
-      Accept: unit tests cover `#//`, `#1/2/`, `#0/0/999`, `#0/0/-50`, `#540/10/3`
-      (→ 180 wraps to −180) and whitespace; every hash `formatHash` can emit still
-      round-trips; the store seeds its initial view from the validated values.
-      Gate: verify, qa:render.
 - [ ] Pole-aware viewport cull: `cullForView` (`src/lib/lod.ts`) keeps cells inside a
       fixed lng/lat *degree* box, but a degree of longitude covers cos(lat) as much ground
       as at the equator — at 70° N the window is a third as wide on the ground as the
@@ -279,3 +268,29 @@ boundary cache lands before the two items that rebuild cells on the path it chan
       re-fetches the file and decodes on the main thread (~2.4 s for the mid tier); if the
       worker *constructor* throws the pool only warns, so that path is invisible to the
       gate; nothing in the UI says the app is running degraded.)*
+- [x] Deep-link parsing accepts garbage: `parseHash('#//')` returns `{0, 0, 0}`
+      (`Number('')` is 0, so empty components pass the finite check), `#0/0/999` seeds a
+      zoom far outside the view's `[minZoom, maxZoom]` (a blank screen from a shared URL),
+      and longitude is unbounded. In `src/lib/urlState.ts`: reject empty or whitespace
+      components, wrap longitude into [−180, 180), clamp zoom to the camera's real bounds —
+      which today are literals in `store/useGlobeStore.ts`; export them from one place
+      instead of repeating them.
+      Accept: unit tests cover `#//`, `#1/2/`, `#0/0/999`, `#0/0/-50`, `#540/10/3`
+      (→ 180 wraps to −180) and whitespace; every hash `formatHash` can emit still
+      round-trips; the store seeds its initial view from the validated values.
+      Gate: verify, qa:render.
+      *(Done 2026-11-17, factory tick 3: `parseHash` now requires each component to be a
+      plain decimal (rejects empty, whitespace, hex, exponent, `Infinity`, trailing junk,
+      `%20`), wraps longitude into [−180, 180), clamps zoom, still rejects a latitude off
+      the sphere, and folds −0 to 0. The zoom bounds live once in a DOM-free
+      `src/lib/camera.ts` (`MIN_ZOOM`, `MAX_ZOOM`, `clampZoom`, `wrapLng`) shared by the
+      parser, the store and the zoom ladder; `zoomBy`'s fallback bounds were −2/8 and
+      disagreed with the view's −1/7. Evidence: 16 tests in `urlState.test.ts`, 8 of which
+      fail against the old parser; a > 10 k-view sweep of the store's whole range
+      round-trips, and the checker's independent 200 k random-view probe (seam, −0, tiny
+      values) found 0 rejects and 0 mismatches. Gate green: 106 tests, qa:render PASS, 0
+      console errors. Checker PASS first time. Not verified in a browser: the seeding of
+      the initial view from a hash (read, not run — the store touches `window` at load, so
+      Node cannot import it). Left as is: two inline `wrapLng` copies in `Globe.tsx` and
+      `KeyboardShortcuts.tsx`; `scripts/qa/page-probe.mjs` no longer forces the bounds in
+      `setCamera`, it inherits the store's.)*

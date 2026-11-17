@@ -1,10 +1,12 @@
 import { create } from 'zustand'
 import type { GlobeViewState, HoverInfo, LodData, Manifest } from '../types'
+import { MAX_ZOOM, MIN_ZOOM, wrapLng } from '../lib/camera'
 import { parseHash } from '../lib/urlState'
 import { prefersReducedMotion } from '../lib/useReducedMotion'
 
 // A `#lng/lat/zoom` deep-link (if present) seeds the camera and disables the
-// idle auto-spin so the shared view stays put.
+// idle auto-spin so the shared view stays put. `parseHash` has already validated it:
+// longitude wrapped into [−180, 180), zoom clamped to [MIN_ZOOM, MAX_ZOOM].
 const HASH_VIEW = parseHash()
 
 // Default hero zoom is viewport-aware: on tall-portrait screens the 1.3 framing
@@ -18,8 +20,8 @@ const INITIAL_VIEW: GlobeViewState = {
   longitude: HASH_VIEW?.longitude ?? 25,
   latitude: HASH_VIEW?.latitude ?? 20,
   zoom: HASH_VIEW?.zoom ?? defaultZoom(),
-  minZoom: -1,
-  maxZoom: 7,
+  minZoom: MIN_ZOOM,
+  maxZoom: MAX_ZOOM,
 }
 
 type Status = 'idle' | 'loading' | 'ready' | 'error'
@@ -72,8 +74,6 @@ interface GlobeStore {
   setAutoRotate: (on: boolean) => void
 }
 
-const wrapLng = (lng: number): number => ((((lng + 180) % 360) + 360) % 360) - 180
-
 export const useGlobeStore = create<GlobeStore>((set) => ({
   manifest: null,
   data: {},
@@ -113,7 +113,7 @@ export const useGlobeStore = create<GlobeStore>((set) => ({
   // the same tick. Repeat clicks accumulate, because each reads the live (mid-tween) zoom.
   zoomBy: (delta) =>
     set((s) => {
-      const { zoom, minZoom = -2, maxZoom = 8 } = s.viewState
+      const { zoom, minZoom = MIN_ZOOM, maxZoom = MAX_ZOOM } = s.viewState
       const next = Math.min(maxZoom, Math.max(minZoom, zoom + delta))
       if (next === zoom) return s
       return {
