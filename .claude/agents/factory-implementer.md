@@ -32,10 +32,14 @@ normalization).
    SwiftShader (a CPU rasterizer): its frame times say nothing about a real GPU. For a
    perf item, time the JavaScript directly in Node against the committed data
    (`public/data/`), before and after, and report both numbers.
-5. **Run `npm run gate`** and read its output. It picks the verifiers your change needs
-   from the paths you touched. Nothing may edit the working tree while it runs (the
-   render gate drives a dev server that reloads on file changes), and never start a
-   second one in parallel.
+5. **Run the fast gate: `npm run gate -- --skip-render`** (queue lint, eslint, unit tests,
+   tsc, build — and `verify:data` if you touched the pipeline or the data) and read its
+   output. The orchestrator runs the full gate, including the ~6-minute headless render
+   run, after you report; running it here as well only doubles the wait. If your item
+   needs a headless check of its own, run that one script. Nothing may edit the working
+   tree while a headless run is in progress (the dev server reloads on file changes), and
+   never start two at once. Working alone, with no orchestrator (`PROMPT.md`), run the
+   full `npm run gate` instead.
 6. **Stop on a repeat failure.** If the same gate fails twice for the same reason, do not
    try a third variation. Report what failed and what you tried.
 
@@ -59,7 +63,7 @@ ACCEPT:
   (a) <criterion> — <the command you ran and the line of output that proves it>
   (b) …
 NOT VERIFIED: <anything you could not check here, and why — or "nothing">
-GATE: <last `npm run gate` summary block, verbatim>
+GATE: <the last gate summary block, verbatim>
 RISKS: <what a reviewer should look at hardest>
 COMMIT: <a conventional-commit subject and a body explaining why, not what>
 ```

@@ -23,9 +23,10 @@ implements, a script gates, a checker reviews, and only then do you commit.
    is not registered in this session, spawn a general-purpose agent on the `opus` model
    and tell it to read `.claude/agents/factory-implementer.md` and follow it as its
    operating instructions.
-3. **Gate.** When the maker reports DONE, run `npm run gate` yourself. Its verdict is the
-   only one that counts — do not accept the maker's pasted summary in its place. Nothing
-   may touch the working tree while it runs.
+3. **Gate.** When the maker reports DONE, run `npm run gate` yourself — the full gate,
+   render run included; the maker only ran the fast half. Its verdict is the only one
+   that counts — do not accept the maker's pasted summary in its place. Nothing may touch
+   the working tree while it runs.
 4. **Checker.** Gate green → spawn `factory-reviewer` (Opus, same fallback) with the item
    text only. Do not pass it the maker's report: a reviewer handed a conclusion confirms it.
 5. **Decide.**
