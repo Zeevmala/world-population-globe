@@ -42,20 +42,27 @@ Ordered correctness first, then performance, then features. Only items that do n
 depend on the open LOD-banding decision (see **Backlog**, first entry) are queued; the
 cull-window, tile-selection, popping and cross-fade work waits there for it.
 
-- [ ] Cache H3 cell boundaries across re-culls: measured on the real mid tier, a re-cull
-      at z2.5 costs ~284 ms of main-thread JS and **239 ms of that is `cellToBoundary` for
-      the 120 k rendered cells** (720 k vertices) — repaid in full on every re-cull during a
-      pan, even though most cells are unchanged between adjacent cull windows. Memoize the
-      boundary per H3 index (bounded LRU keyed on the packed `BigUint64` index, sized to a
-      few times the 120 k cap), or precompute boundaries in the decode worker alongside the
-      packed column. Keep the per-cell true-geometry path: the instanced-column shortcut
-      was tried and reverted for the radial "star" shading it produced
-      (`docs/architecture.md`).
-      Accept: a Node benchmark on the committed mid tier (kept under `scripts/bench/`)
-      shows boundary cost on a repeat cull over an overlapping window down ≥ 5×, with the
-      before/after numbers in the Done note; a unit test proves identical geometry (same
-      cells, same vertices, same order) with the cache cold and warm; memory stays bounded
-      under a sustained pan (the cache has a hard cap and a test for it).
+- [ ] Stop re-tessellating the columns on every zoom frame: `useGlobeLayers` rebuilds the
+      population layer inside a `useMemo` that depends on `elevationScale` (a new value on
+      every zoom frame) and `isDragging`, and `buildPopulationLayer`
+      (`src/layers/populationLayer.ts`) hands deck.gl a fresh `data: { length }` object on
+      each build. deck.gl diffs `data` by reference, so every zoom frame and every drag
+      start / stop is a full data change: all 120 k polygons are fetched and tessellated
+      again (≈ 110–150 ms of main-thread JS per frame even with the boundary cache warm,
+      ≈ 620–710 ms before it — `scripts/bench/boundary_bench.mjs`), although only a uniform
+      (`elevationScale`) or a flag (`pickable`) changed. The comment in the layer already
+      claims "a zoom change costs one uniform write"; make it true: keep the `data` object
+      (and anything else deck.gl compares by identity) stable for as long as the cull is
+      unchanged, so a zoom frame updates `elevationScale` only. Found by the tick-6 maker.
+      Accept: unit tests on real deck.gl layer instances prove (a) two builds that differ
+      only in `elevationScale`, or only in `pickable`, share the same `data` object and
+      report no data change and no `getPolygon` / `getElevation` / `getFillColor` trigger
+      change when diffed the way deck.gl diffs props (use deck.gl's own prop diff, not a
+      re-implementation); (b) a build after the cull key or the tier changed does report a
+      data change; (c) hover still maps `info.index` through the current cull indices after
+      a zoom-only update (no stale closure over an old cull); and (d) a count of
+      `getPolygon` calls across a scripted zoom of 30 frames inside one cull key is 0 after
+      the first build (it is 30 × 3 × cells today) — reported before and after.
       Gate: verify, qa:render.
 - [ ] Night-lights basemap toggle: swap the dark-ocean sphere texture for NASA Black Marble
       (public domain) behind a `Controls.tsx` toggle; columns must stay legible
@@ -379,3 +386,45 @@ cull-window, tile-selection, popping and cross-fade work waits there for it.
       time. Known, bounded: a stale prefetch can hold the cache above its cap by its old
       protect set until the next eviction; an attempt that starts just inside the
       cool-down and fails after it continues the old burst.)*
+- [x] Cache H3 cell boundaries across re-culls: measured on the real mid tier, a re-cull
+      at z2.5 costs ~284 ms of main-thread JS and **239 ms of that is `cellToBoundary` for
+      the 120 k rendered cells** (720 k vertices) — repaid in full on every re-cull during a
+      pan, even though most cells are unchanged between adjacent cull windows. Memoize the
+      boundary per H3 index (bounded LRU keyed on the packed `BigUint64` index, sized to a
+      few times the 120 k cap), or precompute boundaries in the decode worker alongside the
+      packed column. Keep the per-cell true-geometry path: the instanced-column shortcut
+      was tried and reverted for the radial "star" shading it produced
+      (`docs/architecture.md`).
+      Accept: a Node benchmark on the committed mid tier (kept under `scripts/bench/`)
+      shows boundary cost on a repeat cull over an overlapping window down ≥ 5×, with the
+      before/after numbers in the Done note; a unit test proves identical geometry (same
+      cells, same vertices, same order) with the cache cold and warm; memory stays bounded
+      under a sustained pan (the cache has a hard cap and a test for it).
+      Gate: verify, qa:render.
+      *(Done 2026-11-17, factory tick 6: the population layer (`src/layers/populationLayer.ts`)
+      now renders, without the wrapper, the `PolygonLayer` that `H3HexagonLayer` rendered on
+      the GlobeView — per-cell true geometry, no instanced columns — with `getPolygon`
+      served from `BoundaryCache` (`src/lib/h3Boundary.ts`): a bounded LRU keyed on the
+      packed 64-bit H3 index, flat typed storage, hard cap 2^18 cells ≈ 32 MB. The old path
+      ran `cellToBoundary` three times per cell per rebuild, plus a `getResolution` /
+      `isPentagon` pass that is also gone. Sent back once: dropping the wrapper lowered the
+      fill sublayer's index in deck.gl's layer tree by one, which changed its default depth
+      bias — the orchestrator's pixel diff found 31–45 of 504,000 pixels changed at the r8
+      shots (thin column slivers losing to the land fill) and the checker traced it;
+      `getPolygonOffset` now compensates, pinned by a test on deck.gl's own index resolver.
+      Evidence — Node bench on the committed mid tier (`node scripts/bench/boundary_bench.mjs`,
+      adjacent cull windows sharing 97–98 % of their cells; it times two of the old path's
+      three calls, so it understates the gain): repeat-cull boundary cost India z2.5
+      534 → 45 ms (11.8×), Tokyo z3.5 463 → 26 ms (17.7×); whole tessellation 707 → 145 ms
+      and 621 → 106 ms; cold cache 2.2× (checker's run; the maker and the first checker got
+      11.9–18.7×). Geometry bit-identical to deck.gl's `h3ToPolygon` + `flattenPolygon` on
+      9,594 real and hard cells (antimeridian, poles, pentagons, > 6-vertex cells), cold,
+      warm and after eviction; real `PolygonTesselator` output byte-identical; the LRU
+      fuzzed against a Map model at capacities 1 … 4×pool with 0 failures; 360° pans peak at
+      exactly the cap. **Render pixel-identical to the old path at both r8 shots (0 of
+      504,000 pixels differ).** Gate green: 146 tests, qa:render PASS, 0 console errors.
+      Two independent checkers PASSed. Not verified: browser main-thread timing (Node/V8
+      only) and a real GPU. Known: the cache holds ~32 MB for the session once the first
+      population layer is built; `useGlobeLayers` still rebuilds the layer on every zoom
+      frame and drag start/stop (a new `data` object each build) — the rebuilds are now
+      cache hits, but a stable data object would remove them and is worth an item.)*

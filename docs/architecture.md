@@ -10,7 +10,7 @@ static, CDN-served MVP designed to scale toward fine-grained (400 m) global deta
 
 | Layer | Choice | Why |
 |---|---|---|
-| Render | **deck.gl `_GlobeView` + `H3HexagonLayer`** (extruded) | WebGL2, instanced columns, true radial 3D on a globe. GlobeView's only unsupported layers are Heatmap/Contour/Terrain/Mask. |
+| Render | **deck.gl `_GlobeView` + extruded H3 cells** (the `PolygonLayer` that `H3HexagonLayer` renders on a globe, fed from a boundary cache — see *Boundary cache* below) | WebGL2, per-cell true geometry, true radial 3D on a globe. GlobeView's only unsupported layers are Heatmap/Contour/Terrain/Mask. |
 | Data | **Kontur Population** (H3, CC-BY 4.0, 2023-11-01) | SOTA H3-native global population; ships pre-aggregated resolutions that double as LOD tiers. |
 | Format | **SNAPPY Parquet** read by `hyparquet` | Columnar, compact, decoded natively in-browser (no extra codec, no wasm). |
 | Infra | **Static → GitHub Pages + CDN** | Zero backend; cheapest path to scale; best valuation/cost ratio. |
@@ -70,7 +70,7 @@ Kontur r8 *.gpkg  ──DuckDB(spatial+h3)──▶  COPY … PARTITION_BY(paren
   burst; a spent tile rests 30 s after its last failure, then gets a fresh burst (the view's retry
   timer wakes for it), so an outage heals instead of leaving permanent holes. One `console.warn`
   per tile per burst; the clock is injectable so Node tests cover all of it.
-- **Render** reuses the same `H3HexagonLayer` path; the merged set is viewport-culled like `mid`.
+- **Render** reuses the same population layer (`layers/populationLayer.ts`); the merged set is viewport-culled like `mid`.
 - **LOD selection** (`selectActive` in `lib/lod.ts`): r8 wins once zoom ≥ 4.5 and tiles are merged;
   otherwise the finest loaded whole tier (`pickLod`). Shared by `useGlobeLayers` and `Controls`.
 - Shared download/decompress/schema/CRS helpers live in `pipeline/kontur_common.py`.
@@ -83,7 +83,7 @@ src/
   components/
     Globe.tsx           # DeckGL + _GlobeView, controlled viewState, idle auto-rotate, lighting
     Header / Controls / Legend / InfoPanel / Attribution / Loader
-  layers/useGlobeLayers # sphere (SimpleMeshLayer) + land (GeoJsonLayer) + population (H3HexagonLayer)
+  layers/useGlobeLayers # sphere (SimpleMeshLayer) + land (GeoJsonLayer) + population (layers/populationLayer: H3 cells as a PolygonLayer, cached boundaries)
   data/
     load.ts             # manifest + LOD loaders → columnar typed arrays
     decode.worker.ts    # off-thread fetch + Parquet decode → transferable typed arrays
@@ -161,8 +161,25 @@ src/
   - **Instancing — tried and reverted.** `highPrecision: false` (instanced `ColumnLayer`) was
     cheaper in verts but gave every hexagon prism the same face orientation; under the fixed
     directional sun on the `_GlobeView` that produced an N-fold radial "star" of shading across the
-    sphere. It was also perf-neutral at overview, so `H3HexagonLayer` stays on `highPrecision: 'auto'`
-    (per-cell geometry, varied faces, no star). The pan wins above (picking-skip, DPR cap) carry it.
+    sphere. It was also perf-neutral at overview, so the population layer stays on the per-cell
+    polygon path (`highPrecision: 'auto'`, which on a `_GlobeView` always resolves to it — varied
+    faces, no star). The pan wins above (picking-skip, DPR cap) carry it.
+  - **Boundary cache** — that per-cell path paid `cellToBoundary` three times per cell
+    (`PolygonLayer._getPaths`, then the polygon tesselator's sizing + fill passes) on every
+    re-cull, though adjacent cull windows share ~97 % of their cells. `layers/populationLayer.ts`
+    now renders the `PolygonLayer` that `H3HexagonLayer` rendered, without the wrapper: same
+    class, bit-identical geometry, same forwarded props (all asserted in
+    `populationLayer.test.ts`). One thing had to be compensated: deck.gl's default depth bias
+    (`getPolygonOffset` = `-layerIndex × 100`) counts every layer in the tree, composites
+    included, so dropping the wrapper level lowered the fill's `layerIndex` by 1 and a few
+    near-coplanar column slivers lost the depth test to the land fill. The layer's
+    `getPolygonOffset` uses `layerIndex + 1`, restoring the old offset exactly (pinned by a test
+    against deck's own `layerIndexResolver` on both trees; revisit if the tree shape changes).
+    Its `getPolygon` is served from a bounded LRU (`lib/h3Boundary.ts`): keyed on the packed 64-bit index
+    as two uint32 words (survives r8 tile merges, shared across tiers), flat typed storage, hard cap
+    2^18 cells ≈ 32 MB, fresh plain-array output (a small `Float64Array` costs ~0.8 µs to allocate in
+    V8). Geometry is held bit-identical to deck.gl's `h3ToPolygon` + `flattenPolygon`, cold and warm.
+    Repeat-cull boundary cost on the mid tier dropped 11–15× (`scripts/bench/boundary_bench.mjs`).
   - **Re-cull cadence** — `cullKeyFor` quantizes the camera to a zoom-relative step (`halfSpan/4`)
     so the dense-tier cull re-runs ~5–10× less often than the old fixed 1°; `cullForView` keeps a
     spherical cap whose radius (`cullRadiusDeg`) is a function of the *key* — `1.5×halfSpan` of

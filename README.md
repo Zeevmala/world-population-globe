@@ -1,8 +1,9 @@
 # 🌍 World Population Globe
 
 An interactive 3D globe that renders **world population** as extruded H3 hexagon columns —
-height and color encode population per cell. Built with **deck.gl** (`GlobeView` +
-`H3HexagonLayer`) over the **Kontur Population** dataset (~8.03 billion people, 2023).
+height and color both encode population density (people/km², log scale). Built with
+**deck.gl** (`GlobeView` + an extruded `PolygonLayer` of H3 cells) over the **Kontur
+Population** dataset (~8.03 billion people, 2023).
 
 > **Live:** https://zeevmala.github.io/world-population-globe/
 
@@ -11,7 +12,7 @@ height and color encode population per cell. Built with **deck.gl** (`GlobeView`
 ## Stack
 
 - **React 19 + TypeScript + Vite + Tailwind v4**
-- **deck.gl 9** — `_GlobeView`, extruded `H3HexagonLayer`, `SimpleMeshLayer` sphere
+- **deck.gl 9** — `_GlobeView`, extruded `PolygonLayer` of H3 cell boundaries, `SimpleMeshLayer` sphere
 - **Zustand** — view/UI state
 - **hyparquet** — in-browser columnar Parquet reader (SNAPPY, no wasm)
 - **Python + DuckDB** (spatial) — the data pipeline

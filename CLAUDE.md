@@ -1,6 +1,7 @@
 # CLAUDE.md — operating rules (read every run)
 
-3D world-population globe: deck.gl `_GlobeView` + extruded `H3HexagonLayer` over Kontur
+3D world-population globe: deck.gl `_GlobeView` + extruded H3 hexagon columns (a `PolygonLayer`
+fed from a boundary cache — `src/layers/populationLayer.ts`) over Kontur
 Population (H3, CC-BY 4.0), in-browser SNAPPY Parquet via hyparquet, static GitHub Pages deploy.
 
 Anchor files: [VISION.md](VISION.md) north star · [docs/architecture.md](docs/architecture.md)
