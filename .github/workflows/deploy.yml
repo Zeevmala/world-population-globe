@@ -24,7 +24,10 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run build
+      # Publish only what passes the gates CI runs: lint, unit tests, typecheck + build,
+      # then the data gate over the files about to be served.
+      - run: npm run verify
+      - run: npm run verify:data
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
