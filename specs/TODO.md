@@ -42,26 +42,6 @@ Ordered correctness first, then performance, then features. The three items at t
 came out of the 2026-11-17 code review; the rest are the standing queue, re-ordered so the
 boundary cache lands before the two items that rebuild cells on the path it changes.
 
-- [ ] Decode-worker failure must fall back, not hang: in `src/data/decodeClient.ts`,
-      `worker.onerror` only zeroes `slot.inFlight` — requests already posted to that worker
-      are never settled, so `loadLod()` never resolves and the app sits on the loader
-      forever with no error. The inline fallback exists but only behind the `try/catch`
-      around `new Worker`, and a module worker that fails to load or throws does so
-      asynchronously, through `error`, so the fallback is unreachable for the failure it
-      was written for. Track which slot owns each pending request; on `error` /
-      `messageerror` re-run that slot's requests through `decodeInline`, terminate the
-      dead worker, and route later calls inline once no healthy worker is left. Make the
-      pool a unit that takes its worker factory and inline decoder as arguments so Node
-      can drive it with a fake worker.
-      Accept: unit tests prove (a) a worker that errors after `postMessage` → the pending
-      promise resolves with the inline decoder's result; (b) with every worker dead, later
-      calls go inline without touching the pool; (c) one dead worker does not take the
-      healthy one's requests down; (d) a healthy worker's result still resolves and a
-      failure message from it still rejects; and (e) one headless confirmation, recorded
-      in the Done note with before/after: dev server with the worker script request
-      aborted → `status === 'ready'` and cells on screen (extend the script from the item
-      above).
-      Gate: verify, qa:render.
 - [ ] Deep-link parsing accepts garbage: `parseHash('#//')` returns `{0, 0, 0}`
       (`Number('')` is 0, so empty components pass the finite check), `#0/0/999` seeds a
       zoom far outside the view's `[minZoom, maxZoom]` (a blank screen from a shared URL),
@@ -258,3 +238,44 @@ boundary cache lands before the two items that rebuild cells on the path it chan
       second burst after a cool-down in a real browser (Node tests with an injected clock
       only), and retry timing on real hardware — SwiftShader blocks the main thread ~25 s
       per r8 frame, so the timers fired late.)*
+- [x] Decode-worker failure must fall back, not hang: in `src/data/decodeClient.ts`,
+      `worker.onerror` only zeroes `slot.inFlight` — requests already posted to that worker
+      are never settled, so `loadLod()` never resolves and the app sits on the loader
+      forever with no error. The inline fallback exists but only behind the `try/catch`
+      around `new Worker`, and a module worker that fails to load or throws does so
+      asynchronously, through `error`, so the fallback is unreachable for the failure it
+      was written for. Track which slot owns each pending request; on `error` /
+      `messageerror` re-run that slot's requests through `decodeInline`, terminate the
+      dead worker, and route later calls inline once no healthy worker is left. Make the
+      pool a unit that takes its worker factory and inline decoder as arguments so Node
+      can drive it with a fake worker.
+      Accept: unit tests prove (a) a worker that errors after `postMessage` → the pending
+      promise resolves with the inline decoder's result; (b) with every worker dead, later
+      calls go inline without touching the pool; (c) one dead worker does not take the
+      healthy one's requests down; (d) a healthy worker's result still resolves and a
+      failure message from it still rejects; and (e) one headless confirmation, recorded
+      in the Done note with before/after: dev server with the worker script request
+      aborted → `status === 'ready'` and cells on screen (extend the script from the item
+      above).
+      Gate: verify, qa:render.
+      *(Done 2026-11-17, factory tick 2: the pool is now `src/data/decodePool.ts`
+      (`DecodePool(createWorker, decodeInline, size, reportDeath)`, no DOM imports); each
+      slot owns its pending requests, a dead slot is terminated, dropped and its requests
+      re-run inline, and with no healthy worker left calls go inline directly.
+      `decodeClient.ts` is the thin wiring. Sent back once: the first cut reported a death
+      with `console.warn` behind `preventDefault()`, which would have hidden a genuinely
+      broken worker from the render gate — it now logs one `console.error` per dead worker
+      (reason + workers left), so a worker dying in a normal run turns `qa:render` red.
+      Evidence: 20 unit tests in `decodePool.test.ts` cover (a)–(d), the reporting rule and
+      the edges (several requests in flight, late message from a dead worker, inline
+      decoder rejecting or throwing, `postMessage` throwing, factory throwing); headless
+      `node scripts/qa/tile_fail.mjs --fail-worker` with the worker script aborted —
+      BEFORE (maker's run on the old code): still `status=loading`, no error, after 150 s;
+      AFTER (re-run by the orchestrator): `status=ready`, 71,283 cells at +16.6 s, 2 death
+      errors logged, 0 unhandled rejections. The default tile mode of the script still
+      passes. Gate green: 95 tests, qa:render PASS with 0 console errors on the healthy
+      path. Two independent checkers PASSed. Not verified in a browser: `messageerror`
+      and a runtime crash mid-decode (fake worker only). Known limits: an inline fallback
+      re-fetches the file and decodes on the main thread (~2.4 s for the mid tier); if the
+      worker *constructor* throws the pool only warns, so that path is invisible to the
+      gate; nothing in the UI says the app is running degraded.)*

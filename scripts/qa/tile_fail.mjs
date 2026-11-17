@@ -14,13 +14,25 @@
  * With `--fail-times N` only the first N requests for that tile are aborted, so the
  * bounded retry can be seen recovering it (the tile's cells then join the r8 tier).
  *
+ * With `--fail-worker` it checks the decode-worker fallback instead: every request for
+ * the decode worker's module script is aborted, so each pool worker fails to load and
+ * reports it asynchronously through `error`. The overview is opened (no deep link) and
+ * PASS = `status === 'ready'`, the population layer has cells, the worker script really
+ * was requested, each dead worker logged its `decode worker failed` console.error (the
+ * failure is surfaced, not swallowed — that line is what turns qa:render red if a
+ * worker dies in a normal run), and no unhandled rejection / page error. Before the
+ * fix the requests posted to the dead workers were never settled and the app sat on
+ * the loader forever.
+ *
  * Usage: node scripts/qa/tile_fail.mjs [--port 5199] [--timeout-ms 300000] [--parent <h3>] [--fail-times N]
+ *        node scripts/qa/tile_fail.mjs --fail-worker [--port 5199] [--timeout-ms 180000]
  * Exit: 0 pass · 1 fail / inconclusive
  */
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { latLngToCell } from 'h3-js'
 import { launchBrowser } from './browser.mjs'
+import { readAppState } from './page-probe.mjs'
 import { ensureDevServer } from './server.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -36,6 +48,7 @@ const QUIET_MS = 45_000
 const VIEW = { lng: 139.7, lat: 35.68, zoom: 5.5 }
 const PARENT = opt('parent', latLngToCell(VIEW.lat, VIEW.lng, 3))
 const FAIL_TIMES = Number(opt('fail-times', 'Infinity'))
+const FAIL_WORKER = args.includes('--fail-worker')
 
 const t0 = Date.now()
 const log = (m) => console.log(`[tile_fail +${((Date.now() - t0) / 1000).toFixed(1)}s] ${m}`)
@@ -48,6 +61,72 @@ const INIT = `
   })
 `
 
+/**
+ * `--fail-worker`: abort the decode worker's script and wait for the overview anyway.
+ * The worker never loads, so `loadLod()` can only settle through the inline fallback.
+ */
+async function workerFail(server, context, page, pageErrors) {
+  const workerAborts = []
+  const deathErrors = []
+  const otherErrors = []
+  page.on('console', (msg) => {
+    if (msg.type() !== 'error') return
+    if (/decode worker failed/.test(msg.text())) deathErrors.push(msg.text())
+    else otherErrors.push(msg.text())
+  })
+  // A predicate, not a glob: the dev-server worker URL carries a query string
+  // (`decode.worker.ts?worker_file&type=module`).
+  await context.route(
+    (u) => u.pathname.includes('decode.worker'),
+    (route) => {
+      workerAborts.push(Date.now() - t0)
+      log(`abort worker script #${workerAborts.length}: ${route.request().url().replace(server.url, '')}`)
+      return route.abort('failed')
+    },
+  )
+  await page.addInitScript(INIT)
+  log(`open ${server.url} — aborting every request for the decode worker script`)
+  await page.goto(server.url, { waitUntil: 'load', timeout: 120_000 })
+
+  const read = async () => ({
+    ...(await page.evaluate(readAppState)),
+    rejections: await page.evaluate(() => window.__qaRejections ?? []),
+  })
+  const deadline = t0 + TIMEOUT_MS
+  let state = {}
+  let lastLog = 0
+  for (;;) {
+    state = await read().catch(() => state)
+    if (state.status === 'ready' && state.renderedCells > 0 && deathErrors.length >= workerAborts.length) break
+    if (state.status === 'error') break
+    if (Date.now() > deadline) break
+    if (Date.now() - lastLog > 10_000) {
+      lastLog = Date.now()
+      log(`waiting: status=${state.status} loaded=${JSON.stringify(state.loadedLods)} renderedCells=${state.renderedCells} workerAborts=${workerAborts.length}`)
+    }
+    await new Promise((r) => setTimeout(r, 1000))
+  }
+  const unhandled = [
+    ...(state.rejections ?? []),
+    ...pageErrors.filter((m) => !(state.rejections ?? []).includes(m)),
+  ]
+  const checks = {
+    workerScriptRequested: workerAborts.length > 0,
+    // One error line per dead worker: every aborted worker script is one death.
+    workerDeathLogged: deathErrors.length > 0 && deathErrors.length === workerAborts.length,
+    statusReady: state.status === 'ready',
+    cellsOnScreen: (state.renderedCells ?? 0) > 0,
+    noUnhandledRejection: unhandled.length === 0,
+  }
+  log(`status=${state.status} error=${state.storeError} loaded=${JSON.stringify(state.loadedLods)} tier=${state.tier} renderedCells=${state.renderedCells}`)
+  log(`worker script requests aborted: ${workerAborts.length}`)
+  log(`worker-death console.error lines: ${deathErrors.length}${deathErrors.length ? ' — ' + deathErrors.join(' | ') : ''}`)
+  log(`other console.error lines (not asserted): ${otherErrors.length}${otherErrors.length ? ' — ' + otherErrors.join(' | ') : ''}`)
+  log(`unhandled rejections / page errors: ${unhandled.length}${unhandled.length ? ' — ' + unhandled.join(' | ') : ''}`)
+  for (const [k, v] of Object.entries(checks)) log(`  ${v ? 'ok  ' : 'FAIL'} ${k}`)
+  return Object.values(checks).every(Boolean)
+}
+
 async function main() {
   const server = await ensureDevServer({ root: ROOT, port: PORT, log })
   const { browser, context, page } = await launchBrowser({ width: 1280, height: 800 })
@@ -56,6 +135,18 @@ async function main() {
   const aborts = []
   let lastTileActivity = Date.now()
   let result
+  if (FAIL_WORKER) {
+    let pass = false
+    try {
+      page.on('pageerror', (err) => pageErrors.push(err.message))
+      pass = await workerFail(server, context, page, pageErrors)
+    } finally {
+      await browser.close().catch(() => {})
+      await server.stop()
+    }
+    log(pass ? 'PASS' : 'FAIL')
+    process.exit(pass ? 0 : 1)
+  }
   try {
     page.on('pageerror', (err) => pageErrors.push(err.message))
     page.on('console', (msg) => {

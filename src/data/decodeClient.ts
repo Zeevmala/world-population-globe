@@ -1,15 +1,10 @@
 import { h3Column, packH3 } from './h3Column'
 import { readColumns } from './parquet'
+import { DecodePool } from './decodePool'
 import type { DecodeFailure, DecodeResult } from './decode.worker'
-import type { H3Column } from './h3Column'
+import type { CreateWorker, DecodedTable } from './decodePool'
 
-/** One decoded tier/tile: packed H3 indices + parallel columnar attributes. */
-export interface DecodedTable {
-  h3: H3Column
-  population: Float32Array
-  lng: Float32Array
-  lat: Float32Array
-}
+export type { DecodedTable } from './decodePool'
 
 /**
  * Two workers, not one: a 2.4 s mid-tier decode would otherwise sit in front of the
@@ -18,53 +13,28 @@ export interface DecodedTable {
  */
 const POOL_SIZE = 2
 
-interface Pending {
-  resolve: (t: DecodedTable) => void
-  reject: (e: Error) => void
-}
-
-interface Slot {
-  worker: Worker
-  inFlight: number
-}
-
-let pool: Slot[] | null = null
-let poolBroken = false
-const pending = new Map<number, Pending>()
-let nextId = 1
-
-function spawn(): Slot[] | null {
-  try {
-    return Array.from({ length: POOL_SIZE }, () => {
-      const worker = new Worker(new URL('./decode.worker.ts', import.meta.url), {
-        type: 'module',
-      })
-      const slot: Slot = { worker, inFlight: 0 }
-      worker.onmessage = (e: MessageEvent<DecodeResult | DecodeFailure>) => {
-        slot.inFlight--
-        const msg = e.data
-        const p = pending.get(msg.id)
-        if (!p) return
-        pending.delete(msg.id)
-        if (msg.ok) {
-          p.resolve({
-            h3: h3Column(msg.h3),
-            population: msg.population,
-            lng: msg.lng,
-            lat: msg.lat,
-          })
-        } else {
-          p.reject(new Error(msg.error))
-        }
-      }
-      worker.onerror = () => {
-        slot.inFlight = 0
-      }
-      return slot
-    })
-  } catch {
-    // Workers unavailable (blocked by policy, ancient browser) — decode inline instead.
-    return null
+/**
+ * A real module worker. Load failures, top-level throws and undeserializable messages
+ * all arrive asynchronously as `error` / `messageerror` — the pool then re-runs that
+ * worker's requests inline (see `decodePool`).
+ */
+const createWorker: CreateWorker = (events) => {
+  const worker = new Worker(new URL('./decode.worker.ts', import.meta.url), {
+    type: 'module',
+  })
+  worker.onmessage = (e: MessageEvent<DecodeResult | DecodeFailure>) => events.message(e.data)
+  worker.onerror = (e: Event) => {
+    // The pool logs the death itself (one console.error with the reason and the
+    // workers left), so cancel the event: left uncancelled, a top-level throw is also
+    // re-reported on the page as an uncaught error — two lines for one failure, the
+    // second without the context of what the app did about it.
+    e.preventDefault()
+    events.fail(e instanceof ErrorEvent && e.message ? e.message : 'worker failed to load')
+  }
+  worker.onmessageerror = () => events.fail('messageerror')
+  return {
+    post: (req) => worker.postMessage(req),
+    terminate: () => worker.terminate(),
   }
 }
 
@@ -81,26 +51,18 @@ async function decodeInline(url: string): Promise<DecodedTable> {
   }
 }
 
+let pool: DecodePool | null = null
+
 /**
  * Fetch + decode one Parquet table off the main thread.
  *
  * Both the network wait and the ~2.4 s CPU cost of the mid tier move to a worker, and
  * the columns come back as transferred buffers (no copy, no structured-clone of two
- * million strings). Falls back to an inline decode if workers can't be created.
+ * million strings). Falls back to an inline decode if workers can't be created, or
+ * if a worker dies — including one that fails to load at all.
  */
 export function decodeTable(path: string): Promise<DecodedTable> {
   const url = new URL(path, location.href).href
-  if (!pool && !poolBroken) {
-    pool = spawn()
-    poolBroken = pool === null
-  }
-  if (!pool) return decodeInline(url)
-
-  const slot = pool.reduce((a, b) => (b.inFlight < a.inFlight ? b : a))
-  const id = nextId++
-  return new Promise<DecodedTable>((resolve, reject) => {
-    pending.set(id, { resolve, reject })
-    slot.inFlight++
-    slot.worker.postMessage({ id, url })
-  })
+  pool ??= new DecodePool(createWorker, decodeInline, POOL_SIZE)
+  return pool.decode(url)
 }
