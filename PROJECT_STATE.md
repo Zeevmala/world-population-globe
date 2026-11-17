@@ -306,7 +306,7 @@ every guard while quietly regressing bandwidth. Default corrected to 3.
 Corrected in `CLAUDE.md`: r6 sums to **8,031,924,024**, not …025. Only r4 differs, and
 that is float32 rounding in the pipeline's `CAST(... AS FLOAT)` — not a data difference.
 
-## Status: Sprint 8 — the factory gets an oracle, a gate and a checker 🚧 IN PROGRESS
+## Status: Sprint 8 — the factory gets an oracle, a gate and a checker ✅ ON BRANCH (not merged, not deployed)
 
 User brief (2026-11-17): review and upgrade the project for better results, implement the
 factory, execute it on Opus 5.5.
@@ -334,14 +334,31 @@ factory, execute it on Opus 5.5.
 | 6 | Tick 2 — a dead decode worker falls back inline instead of hanging the loader (`dcfb18ab`) | ✅ |
 | 7 | Tick 3 — deep-links: strict parsing, wrapped longitude, clamped zoom (`35f74ebc`) | ✅ |
 | 8 | Tick 4 — spherical-cap cull sized from its memo key (`6e54a1d9`) | ✅ |
+| 9 | Tick 5 — tile stream: stale partial bursts expire; eviction protects the current view (`ed5959a0`) | ✅ |
+| 10 | Tick 6 — H3 boundary cache; the column layer rendered without the `H3HexagonLayer` wrapper (`1eff4574`) | ✅ |
+| 11 | Tick 7 — a zoom frame no longer re-tessellates the columns (`1136b8d1`) | ✅ |
 
-### What the loop is worth, measured on its first four ticks
+### What the loop is worth, measured on seven ticks
 Every tick passed the gate on its first cut. The checker — fresh context, never shown the
-maker's report — still sent three of four back, each for a real defect a green gate could
+maker's report — still sent four of seven back, each for a real defect a green gate could
 not see: a tile abandoned for the whole session after a ten-second outage (tick 1); a dead
 worker reported only as a warning, which would have hidden a broken worker from the render
-gate (tick 2); a window sized from the triggering view rather than its memo key, leaving a
-gap under zoom drift that the old code did not have (tick 4). Tests went 60 → 125.
+gate (tick 2); a cull window sized from the triggering view rather than its memo key,
+leaving a gap under zoom drift that the old code did not have (tick 4); and a depth bias
+that shifted when a wrapper layer was removed, found by a pixel diff of the gate's
+screenshots — 31–45 pixels of 504,000 — and traced by the checker to deck.gl's layer-index
+resolver (tick 6). Two follow-up items came out of the ticks themselves (the tile-stream
+loose ends from tick 1's checkers; the per-zoom-frame rebuild from tick 6's maker) and
+both shipped. Tests went 60 → 150.
+
+Measured gains, Node timings on the committed mid tier unless noted:
+- Boundary work on a repeat cull: 534 → 45 ms (India z2.5), 463 → 26 ms (Tokyo z3.5);
+  whole tessellation 707 → 145 ms and 621 → 106 ms (`scripts/bench/boundary_bench.mjs`).
+- A zoom frame inside one cull key: a full re-tessellation of every culled cell → none
+  (in the real page: 0 `updateGeometry` calls over ten zoom frames,
+  `scripts/qa/zoom_rebuild.mjs`).
+- The cull itself: unchanged cost (15 ms) for a window that is now correct at the poles
+  and across the antimeridian (`scripts/bench/cull_bench.mjs`).
 
 ### The finding that outranks the queue: the LOD bands are ~3 zoom levels early
 Tick 4's checker tested the cull against deck.gl's real `GlobeViewport` rather than the
@@ -370,6 +387,11 @@ that is valid either way.
   the Node timings (`scripts/bench/cull_bench.mjs`) are the ones that transfer.
 - No schedule was registered: a recurring task spends tokens unattended, and whether the
   missing Routine was removed on purpose is not something the repo can answer.
+- Left in the queue, each waiting on something outside the session: the night-lights
+  basemap (its texture host is refused by the cloud environment's network policy) and the
+  render gate in CI (its Accept needs a GitHub Actions run, which needs a pull request —
+  the same PR would be the first Actions run of the `verify` + `verify:data` steps this
+  sprint added to CI and to the deploy workflow, which are unverified there until then).
 
 ## Iteration loop
 
