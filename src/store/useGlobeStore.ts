@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { GlobeViewState, HoverInfo, LodData, Manifest } from '../types'
 import { MAX_ZOOM, MIN_ZOOM, wrapLng } from '../lib/camera'
+import { arrivalZoom } from '../lib/tierPlan'
 import { parseHash } from '../lib/urlState'
 import { prefersReducedMotion } from '../lib/useReducedMotion'
 
@@ -11,8 +12,9 @@ const HASH_VIEW = parseHash()
 
 // Default hero zoom is viewport-aware: on tall-portrait screens the 1.3 framing
 // leaves the globe small with dead space below, so tighten to 1.9. Both values stay
-// < the mid band (2.2) so the coarse `overview` tier remains the on-load tier
-// (no eager 31 MB mid fetch). Load-time only — deep-links and user zoom always win.
+// below the first band past the overview (r5, 3.78 in the manifest) so the coarse
+// `overview` tier remains the on-load tier (no eager r5 / 31 MB mid fetch). Load-time
+// only — deep-links and user zoom always win.
 const defaultZoom = (): number =>
   window.innerHeight > window.innerWidth * 1.4 ? 1.9 : 1.3
 
@@ -127,14 +129,15 @@ export const useGlobeStore = create<GlobeStore>((set) => ({
       }
     }),
   // Request an animated flight (run by `Globe`); stops auto-rotation. Defaults to a
-  // city-scale zoom (5 → r8 streams in) unless the current view is already deeper.
+  // city-scale zoom inside the r8 band (`arrivalZoom`, from the manifest) unless the
+  // current view is already deeper.
   flyTo: (lng, lat, zoom) =>
     set((s) => ({
       autoRotate: false,
       flyTarget: {
         longitude: lng,
         latitude: lat,
-        zoom: zoom ?? Math.max(s.viewState.zoom, 5),
+        zoom: zoom ?? Math.max(s.viewState.zoom, arrivalZoom(s.manifest)),
         id: Date.now(),
       },
     })),

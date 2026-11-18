@@ -5,17 +5,27 @@ Everything under `public/data/**` is pipeline output. Never hand-edit it: change
 
 ## 1. What ships today
 
-Kontur Population **2023-11-01**, baked into three LOD tiers. Figures below are not
+Kontur Population **2023-11-01**, baked into four LOD tiers. Figures below are not
 copied from the manifest — they are what `npm run verify:data` decoded from the
-committed Parquet on 2026-08-28 (FULL mode, 19.0 s, `ALL PASS`).
+committed Parquet (FULL mode, `ALL PASS`; 2026-08-28 for r4/r6/r8, 2026-11-18 for r5,
+≈ 21.6 s since r5 and its roll-up checks were added).
 
-| tier | H3 res | ≈ cell | cells | Σ population | max cell | storage |
-|---|---|---|---|---|---|---|
-| `overview` | r4 | 22 km | 71,283 | 8,031,924,025 | 22,732,636 | `overview.parquet`, 1,189,500 B |
-| `mid` | r6 | 3 km | 2,016,971 | 8,031,924,024 | 1,949,226 | `mid.parquet`, 31,277,924 B |
-| `r8` | r8 | 400 m | 32,957,699 | 8,031,924,024 | 40,673 | 12,761 tiles, 502,427,581 B |
+| tier | H3 res | ≈ cell | cells | Σ population | max cell | storage | zoom band |
+|---|---|---|---|---|---|---|---|
+| `overview` | r4 | 22 km | 71,283 | 8,031,924,025 | 22,732,636 | `overview.parquet`, 1,189,500 B | −2 – 3.78 |
+| `r5` | r5 | 9 km | 393,791 | 8,031,924,024 | 8,333,304 | `r5.parquet`, 6,428,136 B | 3.78 – 5.18 |
+| `mid` | r6 | 3 km | 2,016,971 | 8,031,924,024 | 1,949,226 | `mid.parquet`, 31,277,924 B | 5.18 – 7.99 |
+| `r8` | r8 | 400 m | 32,957,699 | 8,031,924,024 | 40,673 | 12,761 tiles, 502,427,581 B | 7.99 – (max zoom 10) |
 
-`public/data/**` total: **12,766 files, 536.47 MB**. Largest file `mid.parquet`
+The bands come from `pipeline/tiers.py` — a tier starts where its hexagon is 3 CSS px
+across at the equator (`docs/architecture.md` §3). `r5` is **derived**, not downloaded:
+Kontur publishes no r5 file, so `pipeline/build_parents.py` sums the committed r6 tier
+into its H3 r5 parents. Every r6 population is a whole number and every r5 sum is below
+2^24, so the float32 r5 column is exact — `verify:data` checks each r5 cell against the
+sum of its r6 children with no tolerance. Its lng/lat is the H3 cell center (not a
+reprojected Kontur centroid, as in the other tiers).
+
+`public/data/**` total before r5: **12,766 files, 536.47 MB** (r5 adds one 6.43 MB file). Largest file `mid.parquet`
 (31.28 MB); largest tile 267,712 B; tile mean 39,372 B, median 13,022 B, p99 213,780 B.
 Plus `tiles/r8/index.json` (1,431,491 B) and `land.geojson` (138,160 B, Natural Earth
 110 m basemap outline — not population data).
@@ -29,9 +39,9 @@ Not a data discrepancy. Upstream `kontur_population_20231101_r4.gpkg` holds
 **22,732,635.0** (read directly from the GeoPackage, 2026-08-28). The pipeline
 `CAST(... AS FLOAT)`s to float32 for compactness; float32 rounding lifts that max to
 22,732,636 and the r4 total to 8,031,924,025. The r6/r8 tiers round the other way and
-land on 8,031,924,024. CLAUDE.md's shorthand "r4/r6: 8,031,924,025" is the r4 value —
-the exact per-tier totals are the ones in the table above, and they are what
-`verify_data.mjs` asserts.
+land on 8,031,924,024, and r5 — summed from r6 — inherits r6's exact total. The exact
+per-tier totals are the ones in the table above (CLAUDE.md's invariant lists the same),
+and they are what `verify_data.mjs` asserts.
 
 ## 2. Source & license
 
@@ -98,6 +108,8 @@ GeoPackage. Re-run this check before trusting any new release.
 ## 5. Integrity invariants (P0 — must hold after any refresh)
 
 1. Each tier's Σ population is the exact value in §1 and stays ≈ 8.03 B.
+1a. r5 is exactly the H3-parent roll-up of r6: 393,791 cells, every r5 cell the parent of
+   ≥ 1 r6 cell, every r6 cell's parent present, each r5 population == Σ of its r6 children.
 2. Parquet row count == the tier's `cellCount`; per-tile rows == the tile's `cellCount`.
 3. Σ of the 12,761 per-tile `cellCount`s == the r8 `cellCount` (32,957,699), and every
    tile listed in `index.json` exists on disk with no unlisted `parent=` dir beside it.
@@ -132,8 +144,11 @@ incompatibility, postmortem 2026-06-08).
 
 ## 7. Refresh procedure
 
-Prerequisites: Python with `pip install duckdb` (the DuckDB `spatial` and community
-`h3` extensions are installed by the scripts), Node deps installed, and **≥ 12 GB free
+Prerequisites: Python with `pip install -r pipeline/requirements.txt` (`duckdb`, `h3`,
+`h3ronpy`, `pyarrow`; the DuckDB `spatial` and community `h3` extensions are installed
+by `build_lods.py` / `build_tiles.py` — `build_parents.py` needs neither, so the r5 tier
+and the manifest's bands can be rebuilt offline from the committed r6), Node deps
+installed, and **≥ 12 GB free
 disk** — ~2.63 GB of `.gz` plus ~7.1 GB of decompressed GeoPackage land in
 `pipeline/.cache/` (gitignored, never deleted automatically), on top of the 536 MB of
 output.
@@ -145,7 +160,8 @@ output.
 #    pipeline/build_tiles.py   : R8_URL    -> kontur_population_<DATE>.gpkg.gz
 
 # 2. Coarse tiers (downloads 6.7 MB + 185 MB gz).
-npm run data                       # -> overview.parquet, mid.parquet, manifest.json
+npm run data                       # -> overview.parquet, mid.parquet, then (build_parents.py)
+                                   #    r5.parquet + every manifest band from pipeline/tiers.py
 
 # 3. r8 pyramid (downloads 2.44 GB gz, decompresses to ~6.6 GB).
 python pipeline/build_tiles.py --measure-only     # count populated cells (downloads+decompresses first)
@@ -166,8 +182,11 @@ Notes that will bite you:
   pyramid does not error — the client just streams far more bytes per viewport.
 - `build_tiles.py` **`rmtree`s `public/data/tiles/r8` first.** A failed run leaves you
   with no tiles; nothing is incremental.
-- Order matters: `build_lods.py` writes `manifest.json`, `build_tiles.py` only patches
-  the `r8` entry into an existing one and exits if it is missing.
+- Order matters: `build_lods.py` writes `manifest.json`, `build_parents.py` derives r5
+  from the fresh `mid.parquet` and patches its entry in, `build_tiles.py` only patches
+  the `r8` entry into an existing one and exits if it is missing. All three re-band every
+  entry from `pipeline/tiers.py`; to change a band, edit the rule or the table there and
+  run `python pipeline/build_parents.py` (seconds, offline) — never edit the manifest.
 - Both `pipeline/.cache/*.gpkg.gz` and `*.gpkg` are cache-hit-skipped by name. Changing
   `DATA_DATE` without changing the cache filenames (`kontur_r4.gpkg.gz` etc.) will
   re-use the **old** download. Clear `pipeline/.cache/` on a version bump.

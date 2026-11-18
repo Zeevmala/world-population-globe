@@ -8,9 +8,9 @@
  * frame took two seconds, that a tier crossing froze the main thread, or that the
  * canvas came back blank. This harness measures those directly:
  *
- *   · a zoom sweep across all three LOD bands over dense and sparse regions
+ *   · a zoom sweep across every LOD band in the manifest over dense and sparse regions
  *   · real rAF frame timing during scripted pans and zoom ramps
- *   · long-task / stall detection, with the 2.2 and 4.5 tier crossings instrumented
+ *   · long-task / stall detection, with every tier crossing instrumented (cold)
  *   · console + page errors, verbatim, failing the run
  *   · the 120k rendered-cells/frame invariant, read off the live deck.gl layer
  *   · a screenshot per sampled state, each decoded and scored so a blank one fails
@@ -25,7 +25,7 @@
  *   --port <n>            dev-server port (default 5199)
  *   --json <path>         write the JSON report here (default scripts/qa/out/render-qa.json)
  *   --baseline <path>     compare against a previous report; regressions fail the run
- *   --quick               5-step plan (one region, both crossings) for iterating
+ *   --quick               6-step plan (one region, every crossing, every tier reached)
  *   --out <dir>           screenshot directory (default scripts/qa/out)
  *   --no-screenshots      skip PNG capture
  *   --max-stall-ms <n>    also fail if a steady-state frame exceeds this (default: off,
@@ -39,9 +39,10 @@
  *   --frames / --anim-ms  per-sample animation length (default 24 frames, 1200 ms cap)
  *   --settle-timeout <n>  per-sample settle cap (default 60000)
  *
- * A full run samples 13 camera states plus the two cold tier crossings. On a GPU that is
- * quick; under SwiftShader on a contended box expect 6-12 minutes, so --quick exists for
- * iteration and --budget-ms bounds the worst case.
+ * The bands, crossings and sample zooms are derived from public/data/manifest.json. With
+ * the four-tier manifest a full run samples 12 camera states plus the three cold tier
+ * crossings. On a GPU that is quick; under SwiftShader on a contended box expect 10-20
+ * minutes, so --quick (the gate's plan) exists and --budget-ms bounds the worst case.
  *
  * Exit: 0 pass · 1 regression/defect · 2 harness error.
  */
@@ -86,41 +87,89 @@ const REGIONS = {
   ocean: { label: 'S-Pacific', longitude: -140, latitude: -30, density: 'sparse' },
 }
 
-/** Tier bands, from the manifest: overview < 2.2 ≤ mid < 4.5 ≤ r8. */
+/**
+ * Tier bands, read from the committed manifest (`public/data/manifest.json`, written by
+ * `pipeline/tiers.py`) — never typed here, so the plan follows a re-band. Set in `main`.
+ * @type {{ lod: string, minZoom: number, maxZoom: number }[]}
+ */
+let BANDS = []
+
+/** The deepest zoom the camera allows (`src/lib/camera.ts` MAX_ZOOM). */
+const MAX_ZOOM = 10
+/** The desktop hero zoom (`src/store/useGlobeStore.ts`). */
+const HERO_ZOOM = 1.3
+
+function loadBands(root) {
+  const manifest = JSON.parse(readFileSync(join(root, 'public', 'data', 'manifest.json'), 'utf8'))
+  return manifest.lods.map(({ lod, minZoom, maxZoom }) => ({ lod, minZoom, maxZoom }))
+}
+
+/** The tier the app should show at this zoom: the finest whose band is reached. */
 function expectedTier(zoom) {
-  if (zoom < 2.2) return 'overview'
-  if (zoom < 4.5) return 'mid'
-  return 'r8'
+  let tier = BANDS[0].lod
+  for (const b of BANDS) if (zoom >= b.minZoom) tier = b.lod
+  return tier
 }
 
 /** Angular half-extent of the viewport, mirroring `lib/lod.ts` — used to size a
  *  pan step so every zoom level gets a comparable amount of camera motion. */
 const halfSpanDeg = (zoom) => Math.min(60, 180 / Math.pow(2, zoom))
 
+const round2 = (z) => Math.round(z * 100) / 100
+
+/** A cold crossing of each tier threshold: from just below it to just past it. */
+function crossingsFor(region) {
+  return BANDS.slice(1).map((b) => ({
+    type: 'crossing',
+    id: `cross-${b.lod}@${b.minZoom}`,
+    region,
+    from: round2(b.minZoom - 0.18),
+    to: round2(b.minZoom + 0.17),
+    frames: 4,
+    lod: b.lod,
+  }))
+}
+
+/** A zoom inside a tier's band where that tier is unambiguously the wanted one. */
+function bandMiddle(lod) {
+  const b = BANDS.find((x) => x.lod === lod)
+  return round2((Math.max(b.minZoom, -1) + Math.min(b.maxZoom, MAX_ZOOM)) / 2)
+}
+
 /**
  * The run plan, ordered so each tier crossing is measured COLD — before any
- * sample has warmed that tier's data. Crossing 2.2 pays the 31 MB mid parquet
- * parse; crossing 4.5 pays the first r8 tile burst. Sampling those zooms first
+ * sample has warmed that tier's data. Crossing into r5 pays the 6 MB r5 parse, into
+ * mid the 31 MB mid parse, into r8 the first tile burst. Sampling those zooms first
  * would hide exactly the stall we are hunting.
+ *
+ * --quick (the gate's plan) is six steps: the hero, the three cold crossings (whose
+ * settled far side is checked against the cell cap — the widest, most cell-heavy
+ * window each tier gets), and a sample inside the mid and the r8 bands. Every tier is
+ * reached once. The full plan adds a sample in every band, the deep end of the zoom
+ * range, a second metro and an empty ocean.
  */
 function buildPlan(quick) {
+  const tokyo = crossingsFor('tokyo')
+  const at = (lod) => tokyo.find((c) => c.lod === lod)
+  const sample = (region, zoom) => ({ type: 'sample', region, zoom })
+  const finest = BANDS[BANDS.length - 1].lod
   if (quick) {
     return [
-      { type: 'sample', region: 'tokyo', zoom: 1.3 },
-      { type: 'crossing', id: 'cross-2.2', region: 'tokyo', from: 2.0, to: 2.45, frames: 4 },
-      { type: 'sample', region: 'tokyo', zoom: 2.3 },
-      { type: 'crossing', id: 'cross-4.5', region: 'tokyo', from: 4.3, to: 4.7, frames: 4 },
-      { type: 'sample', region: 'tokyo', zoom: 4.6 },
+      sample('tokyo', HERO_ZOOM),
+      ...tokyo.filter((c) => c.lod !== finest),
+      sample('tokyo', bandMiddle(BANDS[BANDS.length - 2].lod)),
+      at(finest),
+      sample('tokyo', bandMiddle(finest)),
     ]
   }
-  const steps = []
-  for (const zoom of [0.5, 1.3, 2.0]) steps.push({ type: 'sample', region: 'tokyo', zoom })
-  steps.push({ type: 'crossing', id: 'cross-2.2', region: 'tokyo', from: 2.0, to: 2.45, frames: 4 })
-  for (const zoom of [2.3, 3.0, 4.0]) steps.push({ type: 'sample', region: 'tokyo', zoom })
-  steps.push({ type: 'crossing', id: 'cross-4.5', region: 'tokyo', from: 4.3, to: 4.7, frames: 4 })
-  for (const zoom of [4.6, 5.5, 6.5]) steps.push({ type: 'sample', region: 'tokyo', zoom })
-  for (const zoom of [2.3, 5.5]) steps.push({ type: 'sample', region: 'cairo', zoom })
-  for (const zoom of [1.3, 4.6]) steps.push({ type: 'sample', region: 'ocean', zoom })
+  const steps = [sample('tokyo', 0.5), sample('tokyo', HERO_ZOOM)]
+  for (const b of BANDS.slice(1)) {
+    steps.push(at(b.lod))
+    steps.push(sample('tokyo', bandMiddle(b.lod)))
+  }
+  steps.push(sample('tokyo', MAX_ZOOM))
+  for (const lod of BANDS.slice(1).map((b) => b.lod)) steps.push(sample('cairo', bandMiddle(lod)))
+  steps.push(sample('ocean', HERO_ZOOM), sample('ocean', bandMiddle(finest)))
   return steps
 }
 
@@ -269,6 +318,8 @@ async function capture(page, opts, id, findings) {
 
 async function main() {
   const opts = parseArgs(process.argv.slice(2))
+  BANDS = loadBands(opts.url ? REPO_ROOT : opts.root)
+  log(`bands (manifest): ${BANDS.map((b) => `${b.lod} ${b.minZoom}–${b.maxZoom}`).join(' · ')}`)
   mkdirSync(opts.out, { recursive: true })
   mkdirSync(dirname(opts.json), { recursive: true })
 
@@ -541,6 +592,22 @@ async function main() {
         `    ${before.state.tier} → ${after.state.tier}, ramp reached z${rampReachedZoom}, frames=${frame.frames} max=${frame.max}ms worst stall=${stall}ms settle=${after.ms}ms(tier reached: ${after.tierReached})`,
       )
     }
+  }
+
+  // Every tier the plan sends a dense region into must actually have been on screen at
+  // least once (a sample's settled tier or a crossing's far side). A tier that never
+  // shows up anywhere in the run is a band the app cannot reach, not a slow machine.
+  if (driveable && !truncated) {
+    const planned = new Set(
+      plan
+        .filter((st) => REGIONS[st.region].density === 'dense')
+        .map((st) => expectedTier(st.type === 'sample' ? st.zoom : st.to)),
+    )
+    const reached = new Set([...samples.map((x) => x.tier), ...crossings.map((c) => c.tierAfter)])
+    for (const t of planned) {
+      if (!reached.has(t)) findings.failures.push(`plan coverage: the "${t}" tier was never active in any step of the run`)
+    }
+    log(`tiers reached: ${[...planned].map((t) => `${t} ${reached.has(t) ? 'yes' : 'NO'}`).join(' · ')}`)
   }
 
   ctx.phase = 'teardown'

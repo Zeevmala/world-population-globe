@@ -1,3 +1,4 @@
+import { wholeTierFor } from '../lib/tierPlan'
 import { useGlobeStore } from '../store/useGlobeStore'
 
 /** Nominal cell edge as a human label: 22 → "22 km", 0.4 → "400 m". */
@@ -7,7 +8,7 @@ function cellLabel(km: number): string {
 
 /**
  * Background-load feedback for the tiers that arrive *after* first paint: crossing into
- * the `mid` band pulls a 31 MB Parquet and crossing into `r8` streams tiles — both of
+ * the `r5` / `mid` bands pulls a 6 / 31 MB Parquet and crossing into `r8` streams tiles — both of
  * which used to happen in total silence. Everything here is derived from real store
  * state (manifest + what's actually decoded), so it can't claim progress that isn't real.
  */
@@ -24,8 +25,11 @@ export function DataStatus() {
   const entered = manifest.lods.filter((l) => zoom >= l.minZoom)
   const active = entered[entered.length - 1] ?? manifest.lods[0]
 
-  // A whole tier we've zoomed into but haven't decoded yet (the 31 MB `mid` case).
-  const pendingWhole = entered.find((l) => !l.tiled && !data[l.lod])
+  // The whole tier the loader is fetching for this zoom but hasn't decoded yet (the
+  // 31 MB `mid` case) — the same choice `useGlobeData` makes, so a tier the loader
+  // skipped (a cold deep link past it) is never reported as loading.
+  const want = wholeTierFor(zoom, manifest)
+  const pendingWhole = want && !data[want.lod] ? want : undefined
   // The tiled tier, entered but with nothing merged yet (first r8 viewport).
   const pendingTiles =
     active.tiled && (!r8Data || r8Data.h3.length === 0) ? active : undefined

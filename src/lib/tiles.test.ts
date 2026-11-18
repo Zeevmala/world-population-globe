@@ -24,9 +24,13 @@ describe('visibleParents', () => {
   })
 
   it('stays within the r8 tile cache (64) even at the widest r8 view', () => {
-    const visible = visibleParents(tokyo(4.5), PARENT_RES)
-    const ring = prefetchParents(tokyo(4.5), PARENT_RES)
-    expect(visible.length + ring.length).toBeLessThanOrEqual(64)
+    // r8 now enters at ≈ 7.99 (7.84 with hysteresis); 4.5, its old entry, is the
+    // harder case and still fits.
+    for (const z of [7.84, 4.5]) {
+      const visible = visibleParents(tokyo(z), PARENT_RES)
+      const ring = prefetchParents(tokyo(z), PARENT_RES)
+      expect(visible.length + ring.length).toBeLessThanOrEqual(64)
+    }
   })
 })
 

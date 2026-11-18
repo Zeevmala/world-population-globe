@@ -1,0 +1,9 @@
+# Python requirements for the data pipeline (`npm run data`, `npm run data:tiles`).
+# build_lods.py / build_tiles.py also load the DuckDB `spatial` extension (and
+# build_tiles.py the community `h3` extension), which DuckDB downloads on first use.
+# build_parents.py needs no extension. Checked with duckdb 2.0.0, h3 4.5.0,
+# h3ronpy 0.22.0.
+duckdb>=1.1
+h3>=4.0
+h3ronpy>=0.22
+pyarrow>=14

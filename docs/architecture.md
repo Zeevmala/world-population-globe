@@ -37,12 +37,27 @@ Kontur *.gpkg.gz  ──download──▶  gunzip  ──DuckDB(spatial)──�
 
 | LOD | H3 res | ≈ cell | cells | Parquet | role |
 |---|---|---|---|---|---|
-| `overview` | r4 | 22 km | 71,283 | 1.2 MB | global hero, always loaded (zoom < 2.2) |
-| `mid` | r6 | 3 km | 2,016,971 | 31 MB | lazy whole-load, viewport-culled (2.2–4.5) |
-| `r8` | r8 | 400 m | 32,957,699 | 502 MB · 12,761 tiles | **tiled**, streamed per-viewport (≥ 4.5) |
+| `overview` | r4 | 22 km | 71,283 | 1.2 MB | global hero, always loaded (zoom < 3.78) |
+| `r5` | r5 | 9 km | 393,791 | 6.4 MB | lazy whole-load, viewport-culled (3.78–5.18) — **H3-parent roll-up of `mid`** |
+| `mid` | r6 | 3 km | 2,016,971 | 31 MB | lazy whole-load, viewport-culled (5.18–7.99) |
+| `r8` | r8 | 400 m | 32,957,699 | 502 MB · 12,761 tiles | **tiled**, streamed per-viewport (7.99 to the zoom-10 maximum) |
 
-**Integrity check:** every tier sums to **≈ 8.03 B** (2023 world population) — r4/r6 to
-8,031,924,025 and the 33 M-cell r8 pyramid to 8,031,924,024. The densest r4 cells resolve to
+**Bands are cut by on-screen cell size** (decided 2026-11-18, Option A in `specs/TODO.md`):
+a tier starts where its hexagon is **3 CSS px across flats at the equator**. On deck.gl's
+GlobeView px/km at the view center = 512·2^zoom / (2π·6371·cos lat) (held to the real
+`GlobeViewport` within 1 % by `src/lib/bands.test.ts`), and an H3 hexagon of mean area A is
+√(2A/√3) across, which puts r5 at 3.78, r6 at 5.18 and r8 at 7.99. The old bands (2.2 / 4.5,
+maximum zoom 7) switched each tier on ~3 zoom levels before its cells were visible — r6 cells
+0.4 px across at 2.2, r8 cells 0.3 px at 4.5 — so the 120 k cap truncated sub-pixel prisms.
+The tier table and the rule live in **one** place, `pipeline/tiers.py`; every pipeline script
+reads it and `build_parents.py` re-applies it to the whole manifest, which the client reads —
+nothing in `src/` types a band. `scripts/bands.test.mjs` pins the committed manifest to the rule.
+r5 is not a Kontur file (Kontur publishes r4, r6, r8): `pipeline/build_parents.py` rolls the
+committed r6 up to its H3 parents in DuckDB SQL (bit arithmetic, no extension) and places each
+r5 cell at its H3 center (h3ronpy) — populations are integers, so the roll-up is exact.
+
+**Integrity check:** every tier sums to **≈ 8.03 B** (2023 world population) — r4 to
+8,031,924,025, r5/r6 and the 33 M-cell r8 pyramid to 8,031,924,024. The densest r4 cells resolve to
 Cairo/Jakarta/Manila/Karachi/Mumbai; the Tokyo r3 tile holds 13,586 × 400 m cells (23.4 M pop).
 
 ## 3b. r8 tile pyramid & streaming (`pipeline/build_tiles.py`)
@@ -71,8 +86,11 @@ Kontur r8 *.gpkg  ──DuckDB(spatial+h3)──▶  COPY … PARTITION_BY(paren
   timer wakes for it), so an outage heals instead of leaving permanent holes. One `console.warn`
   per tile per burst; the clock is injectable so Node tests cover all of it.
 - **Render** reuses the same population layer (`layers/populationLayer.ts`); the merged set is viewport-culled like `mid`.
-- **LOD selection** (`selectActive` in `lib/lod.ts`): r8 wins once zoom ≥ 4.5 and tiles are merged;
-  otherwise the finest loaded whole tier (`pickLod`). Shared by `useGlobeLayers` and `Controls`.
+- **LOD selection** (`selectActive` in `lib/lod.ts`): r8 wins once zoom ≥ its manifest `minZoom`
+  (7.99) and tiles are merged; otherwise the finest loaded whole tier (`pickLod`). Shared by
+  `useGlobeLayers` and `Controls`. **Loading** (`wholeTierFor`, `lib/tierPlan.ts`): only the finest whole tier whose
+  band is reached is fetched, so a cold deep link to street zoom pulls overview + mid (the
+  fallback under the r8 tiles) and skips r5; zooming through a band still loads its tier.
 - Shared download/decompress/schema/CRS helpers live in `pipeline/kontur_common.py`.
 
 ## 4. Frontend
@@ -90,12 +108,15 @@ src/
     decodeClient.ts     # 2-worker pool, request routing, inline fallback
     h3Column.ts         # packed BigUint64 H3 indices + lazy string materialization
     parquet.ts          # hyparquet column reader (subpath import; inline-fallback path)
-    useGlobeData.ts     # eager overview + lazy mid by zoom band
+    useGlobeData.ts     # eager overview + lazy r5 / mid by zoom band (wholeTierFor)
     tileStream.ts       # r8 tile cache: selection, LRU eviction, dedupe, merge, bounded retry
     useTileStreaming.ts # r8 viewport hook: view key → tileStream, retry timer, idle ring prefetch
   lib/
     density.ts          # cell area per H3 res, people/km², shared cross-tier domain
     lod.ts              # pickLod() + selectActive() + hysteresis + cullForView() + quickselect cap
+    tierPlan.ts         # wholeTierFor() (which whole tier to fetch) + arrivalZoom() (search fly-to zoom)
+    screenScale.ts      # GlobeView px/km + hexagon width — the model the bands are cut from
+    zoomLadder.ts       # the zoom ladder's tier bands + cell-size labels, from the manifest
     tiles.ts            # visibleParents() + prefetchParents() (h3-js gridDisk) + coarse view key
     scales.ts           # zoom-continuous column height + earth constants
     colorRamp.ts        # Inferno ramp (RGB + CSS)
@@ -119,20 +140,25 @@ src/
     per cell costs ~3.6 µs (≈7 s for the 2 M-cell mid tier), which no budget absorbs. The
     UI says "≈" wherever it surfaces a number derived from it.
 - **Column height is continuous in zoom, not stepped per tier.** `maxColumnHeightM(zoom)`
-  (`lib/scales.ts`) = `min(800 km, 2.9e6 m · 2^(-1.425·zoom))`, calibrated on the two views
-  that ship: the zoom-1.3 hero (800 km columns) and city zoom ≈5.5 (13 km). Height used to
+  (`lib/scales.ts`) = `min(800 km, max(1 km, 2.9e6 m · 2^(-1.425·zoom)))`, calibrated on the
+  zoom-1.3 hero (800 km columns) and zoom ≈5.5 (13 km). The 1 km floor (since the zoom-10
+  re-band) takes over at zoom ≈ 8.07, just past r8's entry: the decay alone left a 149 m
+  (≈ 2 px) column over a 12 px cell at zoom 10; with the floor a full-domain r8 column stays
+  about as tall as its 0.92 km cell is wide, and zooming in magnifies a fixed scene. Tallest
+  column at the equator: zoom 5 → 20.8 km / 8.5 px, 7 → 2.88 km / 4.7 px, 8.5 → 1 km / 4.6 px,
+  10 → 1 km / 13.1 px. Height used to
   be `approxKm × 32,000` — a per-tier constant — so crossing a threshold collapsed every
   column ~7× in one frame, the most visible seam in the render. Now both tiers agree on the
   height at the crossing, and the switch changes only mesh resolution. It rides deck.gl's
   `elevationScale` uniform (with `getElevation` returning normalized 0–1 density), so a zoom
   change costs one uniform write — no attribute re-upload, no re-cull.
 - **Tier hysteresis** — a tier keeps a 0.15-zoom band once on screen (`lib/lod.ts`), so a
-  camera resting on 2.2 or 4.5 can't oscillate and rebuild the layer every frame. The
+  camera resting on a threshold (3.78 / 5.18 / 7.99) can't oscillate and rebuild the layer every frame. The
   rendered tier is published to the store as `activeLod` and fed back in.
 - **Color** — Inferno (perceptually uniform). Rainbow/jet is banned (fabricates breaks).
 - **Performance budget**
   - overview (71 k): rendered whole.
-  - mid (2 M): **viewport-culled** to a zoom-scaled lng/lat window, capped at 120 k
+  - r5 (394 k) and mid (2 M): **viewport-culled** to a zoom-scaled spherical cap, capped at 120 k
     highest-population cells/frame; cull memoized on a coarse view key (no per-tick recompute).
   - r8 (33 M total): only the visible r3 tiles are fetched, merged, then viewport-culled + capped
     at 120 k/frame — so render cost is bounded regardless of global cell count.
@@ -140,7 +166,7 @@ src/
   - **Decoding runs in a worker** (`data/decode.worker.ts`, 2-worker pool). Measured on the
     committed data, the mid tier costs **2.44 s** of pure decode (metadata 4 ms · population
     296 ms · lng 163 ms · lat 164 ms · **h3 1,817 ms**) — and it used to run on the main
-    thread the instant the camera crossed zoom 2.2, freezing the app mid-gesture. The worker
+    thread the instant the camera crossed into its band (then zoom 2.2), freezing the app mid-gesture. The worker
     fetches and decodes, then **transfers** the buffers, so the main thread pays a postMessage.
   - **H3 indices travel packed.** An H3 index is a 64-bit integer whose canonical string is
     its lowercase hex — always 15 digits (mode-1 sets bit 59). So the column is a

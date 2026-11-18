@@ -12,13 +12,21 @@
  * Usage: node scripts/qa/zoom_rebuild.mjs      (≈ 6 min on the software rasterizer)
  * Exit: 0 pass · 1 fail
  */
-import { dirname, resolve } from 'node:path'
+import { readFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { launchBrowser } from './browser.mjs'
 import { ensureDevServer } from './server.mjs'
 import { readAppState, setCamera } from './page-probe.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
+// A culled tier (more cells than the 120 k cap, so `cullForView` keys on the camera):
+// the coarsest such tier in the manifest — r5 since the re-band — at the cull-key zoom
+// bucket (0.25 wide) nearest the middle of its band.
+const CAP = 120_000
+const manifest = JSON.parse(readFileSync(join(ROOT, 'public', 'data', 'manifest.json'), 'utf8'))
+const TIER = manifest.lods.find((l) => !l.tiled && l.cellCount > CAP)
+const Z0 = Math.round((TIER.minZoom + TIER.maxZoom) / 2 / 0.25) * 0.25
 const t0 = Date.now()
 const log = (m) => console.log(`[zoom_rebuild +${((Date.now() - t0) / 1000).toFixed(1)}s] ${m}`)
 const server = await ensureDevServer({ root: ROOT, port: 5199, log })
@@ -27,14 +35,16 @@ const errors = []
 page.on('pageerror', (e) => errors.push(String(e)))
 page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()) })
 try {
-  await page.goto(`${server.url}#77.0000/20.0000/2.50`, { waitUntil: 'load', timeout: 120_000 })
+  log(`culled tier: ${TIER.lod} (${TIER.cellCount} cells, band ${TIER.minZoom}–${TIER.maxZoom}) at zoom ${Z0}`)
+  await page.goto(`${server.url}#77.0000/20.0000/${Z0.toFixed(2)}`, { waitUntil: 'load', timeout: 120_000 })
   let st
   for (let i = 0; i < 120; i++) {
     st = await page.evaluate(readAppState)
-    if (st.tier === 'mid' && st.renderedCells > 0) break
+    if (st.tier === TIER.lod && st.renderedCells > 0) break
     await new Promise((r) => setTimeout(r, 2000))
   }
   log(`tier=${st.tier} renderedCells=${st.renderedCells}`)
+  if (st.tier !== TIER.lod) throw new Error(`expected the culled "${TIER.lod}" tier on screen, got "${st.tier}"`)
   const frame = () => page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true)))))
   await frame(); await frame()
 
@@ -58,8 +68,8 @@ try {
     return { tess: window.__tess, sameData: top.props.data === window.__d0, elevationScale: Math.round(top.props.elevationScale), cells: top.props.data.length }
   })
 
-  // 1) zoom-only frames inside one cull key (zoom bucket 2.375 … 2.625, position unchanged)
-  const zooms = [2.42, 2.45, 2.48, 2.52, 2.55, 2.58, 2.61, 2.57, 2.5, 2.44]
+  // 1) zoom-only frames inside one cull key (zoom bucket Z0 ± 0.125, position unchanged)
+  const zooms = [-0.08, -0.05, -0.02, 0.02, 0.05, 0.08, 0.11, 0.07, 0, -0.06].map((d) => Z0 + d)
   for (const z of zooms) {
     await page.evaluate(setCamera, { longitude: 77, latitude: 20, zoom: z })
     await frame(); await frame()
@@ -68,7 +78,7 @@ try {
   log(`after ${zooms.length} zoom-only frames: ${JSON.stringify(afterZoom)}`)
 
   // 2) control: a pan across a cull key must re-tessellate
-  await page.evaluate(setCamera, { longitude: 95, latitude: 20, zoom: 2.5 })
+  await page.evaluate(setCamera, { longitude: 95, latitude: 20, zoom: Z0 })
   await frame(); await frame(); await frame()
   const afterPan = await read()
   log(`after an 18° pan (new cull key):   ${JSON.stringify(afterPan)}`)

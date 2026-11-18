@@ -15,7 +15,7 @@ const view = (longitude: number, latitude: number, zoom: number): GlobeViewState
 const tiny = (lod: string, h3Res: number): LodData => makeLod(lod, h3Res, 1, () => [0, 0, 1])
 
 describe('pickLod', () => {
-  const loaded = { overview: tiny('overview', 4), mid: tiny('mid', 6) }
+  const loaded = { overview: tiny('overview', 4), r5: tiny('r5', 5), mid: tiny('mid', 6) }
 
   it('returns null without a manifest', () => {
     expect(pickLod(3, null, loaded)).toBeNull()
@@ -23,47 +23,95 @@ describe('pickLod', () => {
 
   it('picks the finest loaded tier whose band is reached', () => {
     expect(pickLod(1.3, MANIFEST, loaded)).toBe('overview')
-    expect(pickLod(2.2, MANIFEST, loaded)).toBe('mid')
-    expect(pickLod(6, MANIFEST, loaded)).toBe('mid') // r8 is tiled — never in `loaded`
+    expect(pickLod(3.78, MANIFEST, loaded)).toBe('r5')
+    expect(pickLod(5.18, MANIFEST, loaded)).toBe('mid')
+    expect(pickLod(9, MANIFEST, loaded)).toBe('mid') // r8 is tiled — never in `loaded`
   })
 
   it('falls back to a coarser tier while the finer one is still loading', () => {
-    expect(pickLod(3, MANIFEST, { overview: loaded.overview })).toBe('overview')
+    expect(pickLod(4.5, MANIFEST, { overview: loaded.overview })).toBe('overview')
+    expect(pickLod(6, MANIFEST, { overview: loaded.overview, r5: loaded.r5 })).toBe('r5')
+    // A cold deep link loads the overview and the finest whole tier only (`tierPlan.ts`).
+    expect(pickLod(4.5, MANIFEST, { overview: loaded.overview, mid: loaded.mid })).toBe('overview')
   })
 
   it('holds the active tier inside the hysteresis band, then yields', () => {
-    // Zooming out of `mid`: it survives 0.15 below its 2.2 entry zoom…
-    expect(pickLod(2.1, MANIFEST, loaded, 'mid')).toBe('mid')
+    // Zooming out of `r5`: it survives 0.15 below its 3.78 entry zoom…
+    expect(pickLod(3.7, MANIFEST, loaded, 'r5')).toBe('r5')
     // …and gives way once the camera has clearly left.
-    expect(pickLod(2.04, MANIFEST, loaded, 'mid')).toBe('overview')
+    expect(pickLod(3.62, MANIFEST, loaded, 'r5')).toBe('overview')
     // Zooming in from `overview` gets no early entry.
-    expect(pickLod(2.19, MANIFEST, loaded, 'overview')).toBe('overview')
+    expect(pickLod(3.77, MANIFEST, loaded, 'overview')).toBe('overview')
+  })
+})
+
+/**
+ * The shipped band table (`MANIFEST` is pinned to `public/data/manifest.json` by
+ * `scripts/bands.test.mjs`): one zoom inside each band, and the hysteresis at each of
+ * the three thresholds — held 0.1 below on the way out, no early entry on the way in,
+ * released 0.2 below.
+ */
+describe('the shipped band table', () => {
+  const loaded = { overview: tiny('overview', 4), r5: tiny('r5', 5), mid: tiny('mid', 6) }
+  const r8 = tiny('r8', 8)
+  const tierAt = (zoom: number, active?: string) =>
+    selectActive(view(139.7, 35.68, zoom), MANIFEST, loaded, r8, active).entry?.lod
+
+  it('is overview → r5 → mid → r8, each band starting where the last ends', () => {
+    expect(MANIFEST.lods.map((l) => [l.lod, l.h3Res])).toEqual([
+      ['overview', 4],
+      ['r5', 5],
+      ['mid', 6],
+      ['r8', 8],
+    ])
+    for (let i = 1; i < MANIFEST.lods.length; i++) {
+      expect(MANIFEST.lods[i].minZoom).toBe(MANIFEST.lods[i - 1].maxZoom)
+    }
+  })
+
+  it('zoom 3 → r4, 4.5 → r5, 6 → r6, 9 → r8', () => {
+    expect(tierAt(3)).toBe('overview')
+    expect(tierAt(4.5)).toBe('r5')
+    expect(tierAt(6)).toBe('mid')
+    expect(tierAt(9)).toBe('r8')
+    expect(tierAt(10)).toBe('r8')
+  })
+
+  it.each([
+    ['overview', 'r5'],
+    ['r5', 'mid'],
+    ['mid', 'r8'],
+  ])('keeps hysteresis at the %s → %s threshold', (coarse, fine) => {
+    const t = MANIFEST.lods.find((l) => l.lod === fine)!.minZoom
+    expect(tierAt(t - 0.01, coarse)).toBe(coarse) // no early entry
+    expect(tierAt(t, coarse)).toBe(fine)
+    expect(tierAt(t - 0.1, fine)).toBe(fine) // held inside the band on the way out
+    expect(tierAt(t - 0.2, fine)).toBe(coarse) // released past it
   })
 })
 
 describe('selectActive', () => {
-  const loaded = { overview: tiny('overview', 4), mid: tiny('mid', 6) }
+  const loaded = { overview: tiny('overview', 4), r5: tiny('r5', 5), mid: tiny('mid', 6) }
   const r8 = tiny('r8', 8)
 
   it('prefers streamed r8 once its band is reached and tiles are merged', () => {
-    expect(selectActive(view(0, 0, 5), MANIFEST, loaded, r8).entry?.lod).toBe('r8')
+    expect(selectActive(view(0, 0, 8.5), MANIFEST, loaded, r8).entry?.lod).toBe('r8')
   })
 
   it('falls back to the finest whole tier while r8 has no cells', () => {
-    expect(selectActive(view(0, 0, 5), MANIFEST, loaded, null).entry?.lod).toBe('mid')
+    expect(selectActive(view(0, 0, 8.5), MANIFEST, loaded, null).entry?.lod).toBe('mid')
     const empty = makeLod('r8', 8, 0, () => [0, 0, 0])
-    expect(selectActive(view(0, 0, 5), MANIFEST, loaded, empty).entry?.lod).toBe('mid')
+    expect(selectActive(view(0, 0, 8.5), MANIFEST, loaded, empty).entry?.lod).toBe('mid')
   })
 
-  it('applies hysteresis to the r8 threshold too', () => {
-    expect(selectActive(view(0, 0, 4.4), MANIFEST, loaded, r8, 'r8').entry?.lod).toBe('r8')
-    expect(selectActive(view(0, 0, 4.4), MANIFEST, loaded, r8, 'mid').entry?.lod).toBe('mid')
+  it('never shows r8 below its band, even with tiles merged', () => {
+    expect(selectActive(view(0, 0, 6), MANIFEST, loaded, r8).entry?.lod).toBe('mid')
   })
 
   it('returns the data that belongs to the chosen entry', () => {
-    const { entry, data } = selectActive(view(0, 0, 3), MANIFEST, loaded, null)
-    expect(entry?.lod).toBe('mid')
-    expect(data).toBe(loaded.mid)
+    const { entry, data } = selectActive(view(0, 0, 4.5), MANIFEST, loaded, null)
+    expect(entry?.lod).toBe('r5')
+    expect(data).toBe(loaded.r5)
   })
 })
 
@@ -201,7 +249,7 @@ describe('cullForView — spherical cap on an equal-area tier', () => {
     view(10, 89.9, 3), // window crosses the north pole
     view(0, 90, 4),
     view(0, -90, 3),
-    view(77, 20, 2.2), // the widest mid-tier window (r ≈ 58.8°) — still under the cap
+    view(77, 20, 2.2), // r ≈ 58.8°: wider than any culled tier's window (r5 from 3.63) — still under the cap
     view(200, 30, 4), // un-normalized longitude
   ]
 
@@ -261,7 +309,9 @@ describe('cullForView — spherical cap on an equal-area tier', () => {
     // The memo key holds while the camera stays in one bucket — in position AND zoom — so
     // the cull made at any view on a key must cover the viewport of every other view on
     // that key: next to a pole, across it, at the antimeridian, zoomed out to the bucket's
-    // bottom edge. Mid-tier zoom range is 2.05–4.65 (2.2/4.5 ± hysteresis).
+    // bottom edge. Zooms 2.05–4.65: the old mid band ± hysteresis, which now spans the
+    // first culled tier's (r5's) entry at 3.63. The deeper culled zooms (to 10) are the
+    // queue's cull-window-from-the-real-footprint item.
     //
     // The bucket's extent is found from the key itself (bisection along each axis), and its
     // corners — where the worst pairs live — are tested along with random interior views.

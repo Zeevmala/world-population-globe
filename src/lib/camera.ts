@@ -6,8 +6,11 @@
 
 /** Furthest the camera may zoom out (whole globe with margin). */
 export const MIN_ZOOM = -1
-/** Deepest the camera may zoom in (r8 street-block scale). */
-export const MAX_ZOOM = 7
+/**
+ * Deepest the camera may zoom in: a 400 m r8 hexagon is ≈ 12 px across here at the
+ * equator (`lib/screenScale.ts`) — two zoom levels past the ≈ 3 px where r8 starts.
+ */
+export const MAX_ZOOM = 10
 
 export const clampZoom = (zoom: number): number => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom))
 

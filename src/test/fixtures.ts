@@ -5,7 +5,8 @@ import type { LodData, Manifest } from '../types'
  * The shipped manifest's tier table (`public/data/manifest.json`), inlined so the unit
  * tests need neither a DOM nor `fs`. If the pipeline is re-run and these numbers move,
  * update them here — `npm run verify:data` is the gate on the real files, these tests
- * are the gate on the math applied to them.
+ * are the gate on the math applied to them, and `scripts/bands.test.mjs` fails if this
+ * copy and the committed manifest drift apart.
  */
 export const MANIFEST: Manifest = {
   source: 'Kontur Population',
@@ -13,7 +14,7 @@ export const MANIFEST: Manifest = {
   license: 'CC-BY 4.0',
   attribution: '© Kontur (kontur.io), CC-BY 4.0',
   crs: 'EPSG:4326',
-  generatedAt: '2026-06-07T17:38:35Z',
+  generatedAt: '2026-11-18T16:43:24Z',
   lods: [
     {
       lod: 'overview',
@@ -21,18 +22,29 @@ export const MANIFEST: Manifest = {
       h3Res: 4,
       approxKm: 22,
       minZoom: -2,
-      maxZoom: 2.2,
+      maxZoom: 3.78,
       cellCount: 71283,
       maxPopulation: 22732636,
       sumPopulation: 8031924025,
+    },
+    {
+      lod: 'r5',
+      file: 'data/r5.parquet',
+      h3Res: 5,
+      approxKm: 8.5,
+      minZoom: 3.78,
+      maxZoom: 5.18,
+      cellCount: 393791,
+      maxPopulation: 8333304,
+      sumPopulation: 8031924024,
     },
     {
       lod: 'mid',
       file: 'data/mid.parquet',
       h3Res: 6,
       approxKm: 3,
-      minZoom: 2.2,
-      maxZoom: 4.5,
+      minZoom: 5.18,
+      maxZoom: 7.99,
       cellCount: 2016971,
       maxPopulation: 1949226,
       sumPopulation: 8031924024,
@@ -44,7 +56,7 @@ export const MANIFEST: Manifest = {
       indexFile: 'data/tiles/r8/index.json',
       h3Res: 8,
       approxKm: 0.4,
-      minZoom: 4.5,
+      minZoom: 7.99,
       maxZoom: 24,
       cellCount: 32957699,
       maxPopulation: 40673,

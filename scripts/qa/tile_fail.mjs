@@ -2,7 +2,8 @@
 /**
  * tile_fail — headless confirmation that ONE failed r8 tile does not blank the r8 tier.
  *
- * Opens the dev server deep-linked to Tokyo at z5.5 (`#139.7/35.68/5.5`, an r8 view),
+ * Opens the dev server deep-linked to Tokyo one zoom level inside the r8 band (read
+ * from the manifest: `#139.7/35.68/8.99` with r8 from 7.99),
  * aborts every request for the r3 tile under the camera (Playwright `route.abort`,
  * on the browser context so the decode worker's fetches are intercepted too), and
  * waits for the app to publish r8 anyway. PASS = `activeLod === 'r8'` with r8 cells
@@ -28,7 +29,8 @@
  *        node scripts/qa/tile_fail.mjs --fail-worker [--port 5199] [--timeout-ms 180000]
  * Exit: 0 pass · 1 fail / inconclusive
  */
-import { dirname, resolve } from 'node:path'
+import { readFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { latLngToCell } from 'h3-js'
 import { launchBrowser } from './browser.mjs'
@@ -45,7 +47,9 @@ const PORT = Number(opt('port', '5199'))
 const TIMEOUT_MS = Number(opt('timeout-ms', '300000'))
 // After the abort has been seen, give up once no tile has been requested for this long.
 const QUIET_MS = 45_000
-const VIEW = { lng: 139.7, lat: 35.68, zoom: 5.5 }
+// An r8 view: one zoom level past the r8 band's start in the committed manifest.
+const R8 = JSON.parse(readFileSync(join(ROOT, 'public', 'data', 'manifest.json'), 'utf8')).lods.find((l) => l.lod === 'r8')
+const VIEW = { lng: 139.7, lat: 35.68, zoom: Math.round((R8.minZoom + 1) * 100) / 100 }
 const PARENT = opt('parent', latLngToCell(VIEW.lat, VIEW.lng, 3))
 const FAIL_TIMES = Number(opt('fail-times', 'Infinity'))
 const FAIL_WORKER = args.includes('--fail-worker')

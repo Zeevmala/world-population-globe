@@ -1,7 +1,8 @@
 # VISION — world-population-globe
 
 A "Google Earth"-feel 3D globe where all 8.03 billion people are visible as extruded H3
-columns — from a planet-scale hero view down to 400 m city blocks — served entirely as
+columns — from a planet-scale hero view down to 400 m city blocks (r4 → r5 → r6 → r8, each
+tier switching on where its cells are ~3 px across; zoom −1 to 10) — served entirely as
 static files. The portfolio thesis: production-grade GeoAI engineering (LOD pyramids,
 in-browser columnar reads, truthful cartography) with zero backend.
 

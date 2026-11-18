@@ -1,4 +1,5 @@
 import { MAX_ZOOM, MIN_ZOOM } from '../lib/camera'
+import { bandsFor, type LadderBand } from '../lib/zoomLadder'
 import { useGlobeStore } from '../store/useGlobeStore'
 import { HudButton } from './HudButton'
 import {
@@ -12,47 +13,13 @@ import {
   IconPlus,
 } from './icons'
 
-/** Zoom step per +/− press — a few presses span overview → mid → r8. */
+/** Zoom step per +/− press — a few presses per tier band (22 km → 9 km → 3 km → 400 m). */
 export const ZOOM_STEP = 0.7
 
 export type ShareState = 'idle' | 'copied' | 'failed'
 
-/** Nominal cell edge as a human label: 22 → "22 km", 0.4 → "400 m". */
-function cellLabel(km: number): string {
-  return km >= 1 ? `${Math.round(km)} km` : `${Math.round(km * 1000)} m`
-}
-
-interface Band {
-  lod: string
-  label: string
-  /** Fractions of the ladder height, 0 = min zoom (bottom), 1 = max zoom (top). */
-  from: number
-  to: number
-}
-
 /**
- * The LOD bands as ladder fractions. Derived from the manifest (not hard-coded), so the
- * ladder keeps telling the truth if the pipeline re-bands the tiers.
- */
-function bandsFor(
-  lods: { lod: string; approxKm: number; minZoom: number; maxZoom: number }[],
-  min: number,
-  max: number,
-): Band[] {
-  const span = max - min
-  if (span <= 0) return []
-  return lods
-    .map((l) => ({
-      lod: l.lod,
-      label: cellLabel(l.approxKm),
-      from: (Math.max(min, l.minZoom) - min) / span,
-      to: (Math.min(max, l.maxZoom) - min) / span,
-    }))
-    .filter((b) => b.to > b.from)
-}
-
-/**
- * Vertical zoom ladder: shows *where in the scale* the camera is (globe → 3 km → 400 m)
+ * Vertical zoom ladder: shows *where in the scale* the camera is (globe → 9 km → 3 km → 400 m)
  * rather than just offering two anonymous buttons. The painted ladder is `aria-hidden`;
  * a transparent native range input on top carries the label, value, drag and arrow-key
  * semantics, so the control is a real slider for keyboard and screen-reader users.
@@ -68,7 +35,7 @@ function ZoomLadder({
   zoom: number
   min: number
   max: number
-  bands: Band[]
+  bands: LadderBand[]
   activeLod: string | null
   onZoom: (z: number) => void
 }) {
@@ -99,7 +66,7 @@ function ZoomLadder({
             key={b.lod}
             style={{ bottom: `${b.from * 100}%`, height: `calc(${(b.to - b.from) * 100}% - 2px)` }}
             className={`absolute inset-x-0 rounded-full ${
-              ['bg-white/12', 'bg-white/20', 'bg-white/30'][i] ?? 'bg-white/20'
+              ['bg-white/12', 'bg-white/18', 'bg-white/24', 'bg-white/30'][i] ?? 'bg-white/20'
             }`}
           />
         ))}
@@ -145,7 +112,7 @@ export function Controls({ onShowHelp, onShare, shareState }: ControlsProps) {
   const flyTo = useGlobeStore((s) => s.flyTo)
   const manifest = useGlobeStore((s) => s.manifest)
   // The tier actually on screen, published by the layer — not re-derived from zoom here.
-  // Zoom alone would light "400 m" the instant the camera passes 4.5, while the globe is
+  // Zoom alone would light "400 m" the instant the camera passes the r8 band, while the globe is
   // still drawing 3 km cells because the r8 tiles have not merged yet (and it would ignore
   // the LOD hysteresis band). The ladder and the legend must name the same tier.
   const activeLod = useGlobeStore((s) => s.activeLod)

@@ -93,6 +93,13 @@ describe('parseHash', () => {
     expect(parseHash(`#0/0/${MAX_ZOOM + 0.01}`)?.zoom).toBe(MAX_ZOOM)
     expect(parseHash(`#0/0/${MIN_ZOOM - 0.01}`)?.zoom).toBe(MIN_ZOOM)
   })
+
+  it('keeps street-level deep links (the camera goes to zoom 10)', () => {
+    expect(MAX_ZOOM).toBe(10)
+    expect(parseHash('#139.7000/35.6800/9.50')?.zoom).toBe(9.5)
+    expect(parseHash('#139.7000/35.6800/7.00')?.zoom).toBe(7) // the old maximum, no longer clamped
+    expect(parseHash('#139.7000/35.6800/12.00')?.zoom).toBe(10)
+  })
 })
 
 describe('formatHash', () => {

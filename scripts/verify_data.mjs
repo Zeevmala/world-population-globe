@@ -9,15 +9,19 @@
  *
  * Asserts:
  *   - manifest.json shape == `src/types.ts` `Manifest` / `LodEntry`.
- *   - overview + mid: rows == cellCount, Σpop == sumPopulation (and the hard
+ *   - overview + r5 + mid: rows == cellCount, Σpop == sumPopulation (and the hard
  *     8,031,924,025 / 8,031,924,024 constants), max == maxPopulation, bytes ==
  *     file size, finite non-negative populations, lng/lat in range, H3 resolution.
+ *   - r5 (the parent roll-up of mid, `pipeline/build_parents.py`): 393,791 cells; every
+ *     r5 cell is the H3 parent of at least one mid cell, every mid cell's parent is in
+ *     r5, each r5 population == the exact sum of its mid children, and each r5 lng/lat
+ *     is its H3 cell center (h3-js — independent of the pipeline's bit arithmetic).
  *   - r8 pyramid: index.json == manifest, every listed tile exists, no orphan
  *     tiles on disk, Σ cellCount == 32,957,699, Σpop == 8,031,924,024, and every
  *     tile's cells really live under its declared H3 r3 parent.
  *   - every file under public/data/** < 100 MB (GitHub Pages hard limit).
  *
- * Usage: node scripts/verify_data.mjs [--sample[=N]] [--concurrency=N]
+ * Usage: node scripts/verify_data.mjs [--sample[=N]] [--concurrency=N] [--public=DIR]
  *   default: FULL mode — reads all 12,761 r8 tiles (~1 min).
  *   --sample=N: read only N deterministically-strided tiles; the file-existence
  *   and Σ-cellCount checks still cover all 12,761. The mode is printed.
@@ -25,16 +29,20 @@
 import { readdir, readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { cellToParent, getResolution, isValidCell } from 'h3-js'
+import { cellToLatLng, cellToParent, getResolution, isValidCell } from 'h3-js'
 import { parquetMetadataAsync } from 'hyparquet'
 import { parquetReadColumn } from 'hyparquet/src/read.js'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const PUBLIC = path.join(ROOT, 'public')
+const publicArg = process.argv.slice(2).find((a) => a.startsWith('--public='))
+const PUBLIC = publicArg ? path.resolve(publicArg.slice('--public='.length)) : path.join(ROOT, 'public')
 const DATA = path.join(PUBLIC, 'data')
 
 /** Exact per-tier population totals baked by the pipeline (people). */
-const EXPECTED_SUM = { overview: 8031924025, mid: 8031924024, r8: 8031924024 }
+const EXPECTED_SUM = { overview: 8031924025, r5: 8031924024, mid: 8031924024, r8: 8031924024 }
+/** Whole-file tiers, coarse → fine. */
+const WHOLE_TIERS = ['overview', 'r5', 'mid']
+const EXPECTED_R5_CELLS = 393791
 /** Σ of a FLOAT column is float32-rounded per value; allow drift, print the delta. */
 const SUM_TOL = 512
 /** Coarse "still ≈ 8.03 B" guard, same magnitude as verify_live.mjs. */
@@ -187,7 +195,12 @@ check('manifest license is CC-BY 4.0', manifest.license === 'CC-BY 4.0', `licens
 check('manifest crs is EPSG:4326 (client centroids)', manifest.crs === 'EPSG:4326', `crs="${manifest.crs}"`)
 
 const byLod = Object.fromEntries(manifest.lods.map((e) => [e.lod, e]))
-check('manifest has overview/mid/r8', ['overview', 'mid', 'r8'].every((l) => byLod[l]), Object.keys(byLod).join(','))
+check('manifest has overview/r5/mid/r8', [...WHOLE_TIERS, 'r8'].every((l) => byLod[l]), Object.keys(byLod).join(','))
+check(
+  'manifest tiers ordered coarse → fine with contiguous bands',
+  manifest.lods.every((e, i, a) => i === 0 || (e.h3Res > a[i - 1].h3Res && e.minZoom === a[i - 1].maxZoom)),
+  manifest.lods.map((e) => `${e.lod}[r${e.h3Res}] ${e.minZoom}–${e.maxZoom}`).join(', '),
+)
 
 // `LodEntry` (src/types.ts): required numerics + the file/tiled discriminator.
 const LOD_REQUIRED = ['lod', 'h3Res', 'approxKm', 'minZoom', 'maxZoom', 'cellCount', 'maxPopulation', 'sumPopulation']
@@ -205,8 +218,10 @@ for (const e of manifest.lods) {
 // --------------------------------------------------------- whole tiers
 
 const summary = []
+/** Decoded whole tiers, kept for the r5 ↔ mid roll-up below. */
+const tierCols = {}
 
-for (const lod of ['overview', 'mid']) {
+for (const lod of WHOLE_TIERS) {
   const e = byLod[lod]
   if (!e) continue
   const abs = path.join(PUBLIC, e.file)
@@ -246,7 +261,78 @@ for (const lod of ['overview', 'mid']) {
   check(`${lod}: every H3 index is res ${e.h3Res}`, h3st.bad === 0, `malformed=${n(h3st.bad)} of ${n(cols.h3.length)}`)
   check(`${lod}: h3-js validates sample`, h3st.badLib === 0, `invalid=${h3st.badLib} of ${n(h3st.sampled)} sampled`)
 
+  tierCols[lod] = cols
   summary.push({ tier: lod, cells: cols.population.length, sum: Math.round(st.sum), max: st.max, extra: `1 file · ${mb(size)}` })
+}
+
+// ------------------------------------------------- r5 = parent roll-up of mid
+
+{
+  const r5 = tierCols.r5
+  const mid = tierCols.mid
+  if (r5) {
+    check(`r5: rows == ${n(EXPECTED_R5_CELLS)}`, r5.population.length === EXPECTED_R5_CELLS, `rows=${n(r5.population.length)}`)
+  }
+  if (r5 && mid) {
+    const t0 = Date.now()
+    const res = byLod.r5.h3Res
+    /** r5 index → row. A duplicate row would hide a child sum, so count those too. */
+    const row = new Map()
+    let dupes = 0
+    for (let i = 0; i < r5.h3.length; i++) {
+      if (row.has(r5.h3[i])) dupes++
+      else row.set(r5.h3[i], i)
+    }
+    const childSum = new Float64Array(r5.h3.length)
+    const childCount = new Uint32Array(r5.h3.length)
+    let orphans = 0
+    const orphanEg = []
+    for (let i = 0; i < mid.h3.length; i++) {
+      const parent = cellToParent(mid.h3[i], res)
+      const j = row.get(parent)
+      if (j === undefined) {
+        orphans++
+        if (orphanEg.length < 3) orphanEg.push(`${mid.h3[i]}→${parent}`)
+        continue
+      }
+      childSum[j] += mid.population[i]
+      childCount[j]++
+    }
+    let childless = 0
+    let sumMismatch = 0
+    let nonInteger = 0
+    let worst = { d: 0, h3: '' }
+    let centerOff = 0
+    let maxOff = 0
+    for (let j = 0; j < r5.h3.length; j++) {
+      if (childCount[j] === 0) childless++
+      const p = r5.population[j]
+      if (!Number.isInteger(p)) nonInteger++
+      // Every mid population is an integer and every r5 sum is < 2^24, so the FLOAT
+      // column holds the sum exactly: compare with no tolerance.
+      if (p !== childSum[j]) {
+        sumMismatch++
+        if (Math.abs(p - childSum[j]) > worst.d) worst = { d: Math.abs(p - childSum[j]), h3: r5.h3[j] }
+      }
+      const [la, ln] = cellToLatLng(r5.h3[j])
+      let dLng = Math.abs(ln - r5.lng[j])
+      if (dLng > 180) dLng = 360 - dLng
+      const off = Math.max(Math.abs(la - r5.lat[j]), dLng)
+      if (off > maxOff) maxOff = off
+      if (off > 1e-4) centerOff++
+    }
+    check('r5: no duplicate cells', dupes === 0, `duplicates=${n(dupes)}`)
+    check(`r5: every mid cell's r${res} parent is an r5 cell`, orphans === 0, `missing parents=${n(orphans)} of ${n(mid.h3.length)} mid cells${orphanEg.length ? ' e.g. ' + orphanEg.join(', ') : ''}`)
+    check('r5: every r5 cell is the parent of ≥ 1 mid cell', childless === 0, `childless=${n(childless)} of ${n(r5.h3.length)}`)
+    check(
+      'r5: population == exact Σ of its mid children',
+      sumMismatch === 0,
+      `mismatched=${n(sumMismatch)}${sumMismatch ? `, worst Δ=${n(worst.d)} at ${worst.h3}` : ''}`,
+    )
+    check('r5: every population is a whole number (float32-exact)', nonInteger === 0, `non-integer=${n(nonInteger)}`)
+    check('r5: lng/lat == H3 cell center (EPSG:4326, lng first)', centerOff === 0, `off by > 1e-4°: ${n(centerOff)}, max off ${maxOff.toExponential(2)}°`)
+    console.log(`      … r5 ↔ mid roll-up over ${n(mid.h3.length)} cells in ${((Date.now() - t0) / 1000).toFixed(1)}s`)
+  }
 }
 
 // ------------------------------------------------------------- r8 pyramid

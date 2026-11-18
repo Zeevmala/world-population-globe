@@ -40,8 +40,14 @@ describe('the shared density domain', () => {
   it('normalizes every tier against that one domain, not its own maximum', () => {
     // The invariant that replaced per-tier normalization: tier maxima land at different
     // ramp positions because they are different densities.
-    const [r4, r6, r8] = MANIFEST.lods.map((l) => norm(densityOf(l.maxPopulation, l.h3Res)))
+    const [r4, r5, r6, r8] = MANIFEST.lods.map((l) => norm(densityOf(l.maxPopulation, l.h3Res)))
     expect(r4).toBeCloseTo(0.866, 3)
+    // r5 is a roll-up of r6, so its peak density (32,950 /km²) is an average of r6
+    // peaks — below the r8 domain top, and below r6's own (53,951 /km²).
+    expect(densityOf(8333304, 5)).toBeCloseTo(32950, 0)
+    expect(r5).toBeLessThan(1)
+    expect(r5).toBeCloseTo(0.953, 3)
+    expect(r5).toBeLessThan(r6)
     expect(r6).toBeCloseTo(0.998, 3)
     expect(r8).toBe(1)
   })
@@ -50,9 +56,11 @@ describe('the shared density domain', () => {
     // A uniformly-populated r4 cell holds (area ratio)× the people of an r6 cell inside it.
     const density = 4200
     const asR4 = norm(densityOf(density * cellAreaKm2(4), 4))
+    const asR5 = norm(densityOf(density * cellAreaKm2(5), 5))
     const asR6 = norm(densityOf(density * cellAreaKm2(6), 6))
     const asR8 = norm(densityOf(density * cellAreaKm2(8), 8))
-    expect(asR4).toBeCloseTo(asR6, 12)
+    expect(asR4).toBeCloseTo(asR5, 12)
+    expect(asR5).toBeCloseTo(asR6, 12)
     expect(asR6).toBeCloseTo(asR8, 12)
   })
 

@@ -5,7 +5,7 @@ const MAX_RENDERED_CELLS = 120_000
 
 /**
  * Zoom slack a tier keeps once it is on screen. Without it, a camera resting on a
- * threshold (2.2 or 4.5) flips tiers on every sub-pixel zoom jitter, and each flip
+ * threshold (any tier's `minZoom`) flips tiers on every sub-pixel zoom jitter, and each flip
  * rebuilds and re-uploads the whole layer. A tier now has to be left by this much
  * before it yields, so the boundary is crossed once, deliberately.
  */
@@ -90,8 +90,8 @@ const positionQuantum = (zq: number) => Math.max(0.25, halfSpanDeg(zq) / 4)
  * the sum only wins where the 0.25° quantum floor bites (zoom ≳ 9.5).
  *
  * Clamped to 90°: past a hemisphere is the far side of the globe, never on screen. (It
- * only binds at zoom ≲ 1.6, where the half-span is capped at 60°; the mid tier starts at
- * 2.05, where the radius is ≈ 67.5°.)
+ * only binds at zoom ≲ 1.6, where the half-span is capped at 60°; the first culled tier,
+ * r5, is not on screen below ≈ 3.6 — its 3.78 entry less the hysteresis band.)
  */
 export function cullRadiusDeg(zoom: number): number {
   const zq = quantizeZoom(zoom)

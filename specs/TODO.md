@@ -42,54 +42,6 @@ Option A (decided 2026-11-18, see **Backlog**) comes first, as five items in dep
 order — each leaves the app coherent on its own. The two items after them each wait on
 something outside the session.
 
-- [ ] Re-band on on-screen cell size — r5 tier, new bands, zoom to 10: step 1 of Option A.
-      (a) Pipeline: add an r5 tier as the H3-parent aggregation of the committed r6 tier —
-      a new `pipeline/build_parents.py`, vectorized (DuckDB SQL for the aggregation; the
-      parent by H3 bit arithmetic or an H3 extension; lng/lat = the parent's H3 cell
-      center from a vectorized H3 library — no Python row loops), the same Parquet schema
-      as every other tier (`h3, population, lng, lat`), written to `public/data/r5.parquet`
-      with a manifest entry and wired into `npm run data`. Checked feasible 2026-11-18 with
-      PyPI packages only (`duckdb`, `h3`, `h3ronpy`, `pyarrow`; the DuckDB community-
-      extension host is not reachable from the cloud session): 393,791 r5 cells,
-      Σ = 8,031,924,024 exactly, and the parent computed by bit arithmetic in plain DuckDB
-      SQL equals `h3.cell_to_parent` on 20,000 sampled cells. Record the Python
-      requirements where `docs/data.md` describes a refresh.
-      (b) Bands: the pipeline's tier table is the one place band constants live
-      (`build_lods.py` `TIERS`, `build_tiles.py` `MIN_ZOOM`); move it to the rule "a tier
-      starts where its hexagon is 3 CSS px across flats at the equator". On deck.gl's
-      GlobeView px per km = 512·2^zoom / (2π·6371·cos lat), which puts the thresholds near
-      zoom 3.78 (r5), 5.18 (r6) and 7.99 (r8); r4 runs below, and until the r7 item lands
-      r6 runs to 7.99. Derive the numbers from that model and verify the model against
-      `GlobeViewport` in a unit test — do not type them in. Client selection is already
-      driven by the manifest, so it follows.
-      (c) `MAX_ZOOM` 7 → 10 (`src/lib/camera.ts`), so an r8 cell is ~12 px at full zoom.
-      Then walk everything that assumed 7 or the old 2.2 / 4.5 bands and move it: the zoom
-      ladder in `Controls.tsx`; the search fly-to default zoom (5 "so r8 streams in");
-      `maxColumnHeightM` over zoom 7–10 (report the tallest column in metres and in px at
-      zoom 5, 7, 8.5 and 10, and retune the profile if columns vanish — it must stay
-      continuous in zoom); any UI copy that names a zoom or a tier; the unit-test fixture
-      manifest; the headless scripts that navigate by zoom (`scripts/qa/tile_fail.mjs`
-      needs an r8 view, `scripts/qa/zoom_rebuild.mjs` a culled tier); and the plans in
-      `scripts/qa/render_qa.mjs` — samples and crossings must follow the new bands and
-      cover every tier that can render, with `--quick` kept under ~9 min.
-      (d) `scripts/verify_data.mjs` covers r5: Σ, cell count, file size, CRS bounds, every
-      r5 cell is the H3 parent of at least one r6 cell, every r6 cell's parent is present,
-      and each r5 population equals the sum of its r6 children.
-      (e) Docs that name the tiers, bands, sums or zoom range say the new truth:
-      `docs/architecture.md`, `docs/data.md`, `VISION.md`, `README.md`, and the tier sums
-      in `CLAUDE.md`'s invariants (this item may edit that paragraph).
-      Accept: (1) `npm run verify:data` ALL PASS with r5, and it fails when r5 is tampered
-      with (a dropped row; one changed population) — show both; (2) a unit test computes
-      the bands from the projection model and they equal the manifest's within 0.02 zoom,
-      and the model's px/km is within 1 % of `GlobeViewport`'s at lat 0 / 45 / 70 and zoom
-      2–10; (3) unit tests on the real band table: zoom 3 → r4, 4.5 → r5, 6 → r6, 9 → r8,
-      hysteresis intact at each threshold; the density domain is unchanged (the r8 peak,
-      55,163 people/km²) with the r5 maximum normalizing below 1; column height continuous
-      across every threshold up to zoom 10; (4) render gate green on the new plan: every
-      tier in the plan is reached, ≤ 120 k cells, 0 console errors, and the r8 sample is
-      at a zoom where r8 is the wanted tier; (5) the headless checks pass at their new
-      zooms (`tile_fail.mjs` in both modes, `zoom_rebuild.mjs`).
-      Gate: verify, qa:render, verify:data.
 - [ ] Cull window from the real footprint: `cullForView` sizes its window from
       `halfSpanDeg = min(60, 180/2^zoom)`, which matches neither the canvas nor latitude.
       Measured against `GlobeViewport` on 1280×800: at zoom 5.5 the screen edge is 10.5°
@@ -116,7 +68,13 @@ something outside the session.
       where on-screen exceeds 120 k is listed (it feeds the latitude/canvas item below);
       (d) a canvas resize changes the cull key; (e) cull cost on the 2 M-cell r6 tier
       within 2× of before, both numbers reported; (f) the gate's r5 and r6 screenshots
-      show columns out to the screen edges.
+      show columns out to the screen edges; (g) the stale-coverage test in `lod.test.ts`
+      sweeps the zooms culled tiers actually run at now (3.6–10), not 2.05–4.65.
+      While in the render harness, since (f) is read off its screenshots: dismiss the
+      first-run cue before capturing (it covers the middle of every shot), read the
+      maximum zoom from the app instead of retyping `MAX_ZOOM = 10`, fix the header's
+      count of sampled states, and make a budget-truncated run fail the "every planned
+      tier was reached" check instead of skipping it.
       Gate: verify, qa:render.
 - [ ] Tile streaming for any tiled tier, tiles chosen from the footprint:
       `useTileStreaming` and `selectActive` hard-code `'r8'`, the store has a single
@@ -145,8 +103,10 @@ something outside the session.
       (r2 keeps a 1280×800 screen at the band's entry zoom within ~20 tiles; r3 would need
       over 60), manifest entry with the band from the 3-px rule (≈ 6.59–7.99; r6 then ends
       at 6.59). `verify:data` covers it: Σ, counts, every file < 100 MB, tile ↔ parent
-      roll-up, r7 ↔ r8 children sums. Client: nothing but the tier table should need to
-      change after the previous item — if more does, say what and why.
+      roll-up, r7 ↔ r8 children sums. `scripts/verify_live.mjs` (the post-deploy gate)
+      checks every tier the manifest lists instead of a fixed overview / mid / r8 — it has
+      ignored r5 since that tier shipped. Client: nothing but the tier table should need
+      to change after the previous item — if more does, say what and why.
       Accept: (1) `npm run verify:data` ALL PASS with five tiers and fails under tampering
       (a deleted tile; a mislabelled parent); Σ r7 = Σ r8; (2) total added data and the
       largest tile reported, every file < 100 MB, and the published site still under
@@ -167,7 +127,12 @@ something outside the session.
       them to the model. Also load a whole tier only when it is wanted or about to be —
       today every whole tier below the zoom is fetched, so a deep-link to zoom 9 would
       download r5 and the 31 MB r6 for nothing — and start that load shortly before the
-      band so the crossing does not wait on it.
+      band so the crossing does not wait on it. (Tick 8 already narrowed the loader to
+      the finest whole tier whose band is reached; what is left: a search fly-to from the
+      hero still fetches and decodes every tier it merely passes through — r5's 6 MB
+      competes with the 31 MB r6 and the r8 tile burst mid-flight — and a cold deep-link
+      into the r6 band shows 22 km cells until the 31 MB file decodes, where the 6 MB r5
+      would arrive far sooner as an intermediate.)
       Accept: unit tests prove (a) at one zoom the selected tier steps finer as latitude
       rises, at the latitude the model predicts, and coarser as the canvas grows; (b) at
       the equator on a 1280×800 canvas selection equals the manifest's nominal bands;
@@ -175,7 +140,8 @@ something outside the session.
       not alternate tiers; (d) a cold deep-link to zoom 9 requests no whole tier other than
       the overview, and approaching a whole tier's band from below requests it before the
       threshold; (e) the bench from the cull item, re-run: no listed view exceeds the cap
-      on 1280×800 or 1920×1080.
+      on 1280×800 or 1920×1080; (f) a fly-to from the hero to a city requests only the
+      tiers it will stop in or fall back on, not every tier it crosses.
       Gate: verify, qa:render.
 - [ ] Night-lights basemap toggle: swap the dark-ocean sphere texture for NASA Black Marble
       (public domain) behind a `Controls.tsx` toggle; columns must stay legible
@@ -555,3 +521,85 @@ something outside the session.
       the r8 screenshots still pixel-identical. Checker PASS first time. Not measured: the
       frame-time saving in ms on real hardware — the item's 110–150 ms figure is the Node
       cost of one rebuild, which each zoom frame no longer pays.)*
+- [x] Re-band on on-screen cell size — r5 tier, new bands, zoom to 10: step 1 of Option A.
+      (a) Pipeline: add an r5 tier as the H3-parent aggregation of the committed r6 tier —
+      a new `pipeline/build_parents.py`, vectorized (DuckDB SQL for the aggregation; the
+      parent by H3 bit arithmetic or an H3 extension; lng/lat = the parent's H3 cell
+      center from a vectorized H3 library — no Python row loops), the same Parquet schema
+      as every other tier (`h3, population, lng, lat`), written to `public/data/r5.parquet`
+      with a manifest entry and wired into `npm run data`. Checked feasible 2026-11-18 with
+      PyPI packages only (`duckdb`, `h3`, `h3ronpy`, `pyarrow`; the DuckDB community-
+      extension host is not reachable from the cloud session): 393,791 r5 cells,
+      Σ = 8,031,924,024 exactly, and the parent computed by bit arithmetic in plain DuckDB
+      SQL equals `h3.cell_to_parent` on 20,000 sampled cells. Record the Python
+      requirements where `docs/data.md` describes a refresh.
+      (b) Bands: the pipeline's tier table is the one place band constants live
+      (`build_lods.py` `TIERS`, `build_tiles.py` `MIN_ZOOM`); move it to the rule "a tier
+      starts where its hexagon is 3 CSS px across flats at the equator". On deck.gl's
+      GlobeView px per km = 512·2^zoom / (2π·6371·cos lat), which puts the thresholds near
+      zoom 3.78 (r5), 5.18 (r6) and 7.99 (r8); r4 runs below, and until the r7 item lands
+      r6 runs to 7.99. Derive the numbers from that model and verify the model against
+      `GlobeViewport` in a unit test — do not type them in. Client selection is already
+      driven by the manifest, so it follows.
+      (c) `MAX_ZOOM` 7 → 10 (`src/lib/camera.ts`), so an r8 cell is ~12 px at full zoom.
+      Then walk everything that assumed 7 or the old 2.2 / 4.5 bands and move it: the zoom
+      ladder in `Controls.tsx`; the search fly-to default zoom (5 "so r8 streams in");
+      `maxColumnHeightM` over zoom 7–10 (report the tallest column in metres and in px at
+      zoom 5, 7, 8.5 and 10, and retune the profile if columns vanish — it must stay
+      continuous in zoom); any UI copy that names a zoom or a tier; the unit-test fixture
+      manifest; the headless scripts that navigate by zoom (`scripts/qa/tile_fail.mjs`
+      needs an r8 view, `scripts/qa/zoom_rebuild.mjs` a culled tier); and the plans in
+      `scripts/qa/render_qa.mjs` — samples and crossings must follow the new bands and
+      cover every tier that can render, with `--quick` kept under ~9 min.
+      (d) `scripts/verify_data.mjs` covers r5: Σ, cell count, file size, CRS bounds, every
+      r5 cell is the H3 parent of at least one r6 cell, every r6 cell's parent is present,
+      and each r5 population equals the sum of its r6 children.
+      (e) Docs that name the tiers, bands, sums or zoom range say the new truth:
+      `docs/architecture.md`, `docs/data.md`, `VISION.md`, `README.md`, and the tier sums
+      in `CLAUDE.md`'s invariants (this item may edit that paragraph).
+      Accept: (1) `npm run verify:data` ALL PASS with r5, and it fails when r5 is tampered
+      with (a dropped row; one changed population) — show both; (2) a unit test computes
+      the bands from the projection model and they equal the manifest's within 0.02 zoom,
+      and the model's px/km is within 1 % of `GlobeViewport`'s at lat 0 / 45 / 70 and zoom
+      2–10; (3) unit tests on the real band table: zoom 3 → r4, 4.5 → r5, 6 → r6, 9 → r8,
+      hysteresis intact at each threshold; the density domain is unchanged (the r8 peak,
+      55,163 people/km²) with the r5 maximum normalizing below 1; column height continuous
+      across every threshold up to zoom 10; (4) render gate green on the new plan: every
+      tier in the plan is reached, ≤ 120 k cells, 0 console errors, and the r8 sample is
+      at a zoom where r8 is the wanted tier; (5) the headless checks pass at their new
+      zooms (`tile_fail.mjs` in both modes, `zoom_rebuild.mjs`).
+      Gate: verify, qa:render, verify:data.
+      *(Done 2026-11-18, factory tick 8, Option A step 1. Bands now come from one rule in
+      one place — `pipeline/tiers.py`, "a tier starts where its hexagon is 3 CSS px across
+      flats at the equator", computed from the H3 mean areas — and reach the client through
+      the manifest: overview (r4) below 3.78, r5 3.78–5.18, mid (r6) 5.18–7.99, r8 from
+      7.99; `MAX_ZOOM` is 10. `pipeline/build_parents.py` builds r5 from the committed r6
+      (parent by H3 bit arithmetic in plain DuckDB SQL, centers from `h3ronpy`, no row
+      loops; 0.3 s, byte-identical across runs) and re-bands the manifest;
+      `pipeline/requirements.txt` lists what it needs. Whole tiers now load only once their
+      band is reached, the search fly-to lands at the r8 band + 0.5 (8.49), and the column
+      height has a 1 km floor above zoom ≈ 8.07 so r8 columns do not flatten to 2 px at
+      zoom 10 (still continuous; nothing changes at zoom ≤ 8).
+      Evidence: r5 = 393,791 cells, 6.43 MB, Σ = 8,031,924,024 exactly, every population an
+      integer below 2^24; the checker rebuilt r5 independently with the H3 library (same
+      cells, 0 population mismatches, centers within 7.6e-6°), re-ran the pipeline in a
+      scratch copy (byte-identical `r5.parquet`, manifest identical but for `generatedAt`
+      — not hand-edited) and re-derived the bands from `GlobeViewport` (3.779 / 5.182 /
+      7.990; model error 7e-5). `verify:data` ALL PASS in ~22 s and fails under five
+      tamperings (dropped row, changed population with Σ kept, non-integer population,
+      wrong parent, non-contiguous band). 173 unit tests. Render gate green in 188 s (was
+      ~400 s): overview 71,283 cells, r5 and mid reached at their crossings, r8 38,298
+      cells at zoom 9, 0 console errors, worst stall 17.8 s (was ~40 s). Headless checks
+      re-run by the orchestrator at the new zooms, all PASS: `tile_fail.mjs` (r8 at 8.99,
+      24,712 cells with the Tokyo tile aborted), `--fail-worker`, `zoom_rebuild.mjs` (r5,
+      0 re-tessellations over ten zoom frames). Entry chunk 219.78 → 220.16 kB.
+      The checker returned FAIL for one reason only — it could not see those three headless
+      runs — and no code finding above minor; the runs above close it.
+      Not verified: `build_lods.py` / `build_tiles.py` end to end (the Kontur source and
+      the DuckDB extension hosts are unreachable here; import-checked and read only), and
+      how the 1 km floor looks on a real GPU.
+      Known, and why it is not finished yet — measured by the checker on 1280×800: the
+      old cull radius still covers only 39–57 % of the canvas at the r5 and r6 entry zooms
+      and the r8 tile disk 76–80 % at zoom 8 (100 % from zoom 9); those are the next two
+      items. r5's lng/lat is the H3 cell center, the Kontur tiers' the reprojected polygon
+      centroid — used for the cull only. The ladder labels r5 "9 km" (8.5 rounded).)*

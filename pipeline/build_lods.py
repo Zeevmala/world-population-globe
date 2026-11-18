@@ -39,6 +39,7 @@ from kontur_common import (
     download,
     log,
 )
+from tiers import TIER_BY_LOD, apply_bands, bands
 
 TAG = "build_lods"
 
@@ -70,10 +71,16 @@ class Tier:
         return OUT / f"{self.lod}.parquet"
 
 
-TIERS: list[Tier] = [
-    Tier("overview", 4, 22.0, min_zoom=-2.0, max_zoom=2.2),
-    Tier("mid", 6, 3.0, min_zoom=2.2, max_zoom=4.5),
-]
+def _tier(lod: str) -> Tier:
+    """A Kontur-sourced whole tier, with its resolution, label and band from ``tiers.py``."""
+    spec = TIER_BY_LOD[lod]
+    lo, hi = bands()[lod]
+    return Tier(lod, spec.h3_res, spec.approx_km, min_zoom=lo, max_zoom=hi)
+
+
+# The tiers this script builds from Kontur; r5 (build_parents.py) and r8
+# (build_tiles.py) are built elsewhere. Bands are never typed here — see tiers.py.
+TIERS: list[Tier] = [_tier("overview"), _tier("mid")]
 
 
 def build_tier(con: duckdb.DuckDBPyConnection, tier: Tier) -> dict:
@@ -141,9 +148,9 @@ def main() -> int:
         existing = {e["lod"]: e for e in prev.get("lods", [])}
     for e in entries:
         existing[e["lod"]] = e
-    ordered = [existing[t.lod] for t in TIERS if t.lod in existing]
-    # Preserve any extra (e.g. tiled r8) entries appended by build_tiles.py.
-    ordered += [e for lod, e in existing.items() if lod not in {t.lod for t in TIERS}]
+    # Keeps the entries other scripts own (r5, tiled r8), re-bands all of them and
+    # puts them in tier order (tiers.py).
+    ordered = apply_bands(list(existing.values()))
 
     manifest = {
         "source": "Kontur Population",

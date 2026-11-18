@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "data": "python pipeline/build_lods.py",
+    "data": "python pipeline/build_lods.py && python pipeline/build_parents.py",
     "data:tiles": "python pipeline/build_tiles.py",
     "typecheck": "tsc -b",
     "build": "tsc -b && vite build",
