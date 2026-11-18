@@ -38,10 +38,145 @@ REPORT  : evidence in the Done note + commit body; sprint summary → PROJECT_ST
 
 ## Queue
 
-Ordered correctness first, then performance, then features. Only items that do not
-depend on the open LOD-banding decision (see **Backlog**, first entry) are queued; the
-cull-window, tile-selection, popping and cross-fade work waits there for it.
+Option A (decided 2026-11-18, see **Backlog**) comes first, as five items in dependency
+order — each leaves the app coherent on its own. The two items after them each wait on
+something outside the session.
 
+- [ ] Re-band on on-screen cell size — r5 tier, new bands, zoom to 10: step 1 of Option A.
+      (a) Pipeline: add an r5 tier as the H3-parent aggregation of the committed r6 tier —
+      a new `pipeline/build_parents.py`, vectorized (DuckDB SQL for the aggregation; the
+      parent by H3 bit arithmetic or an H3 extension; lng/lat = the parent's H3 cell
+      center from a vectorized H3 library — no Python row loops), the same Parquet schema
+      as every other tier (`h3, population, lng, lat`), written to `public/data/r5.parquet`
+      with a manifest entry and wired into `npm run data`. Checked feasible 2026-11-18 with
+      PyPI packages only (`duckdb`, `h3`, `h3ronpy`, `pyarrow`; the DuckDB community-
+      extension host is not reachable from the cloud session): 393,791 r5 cells,
+      Σ = 8,031,924,024 exactly, and the parent computed by bit arithmetic in plain DuckDB
+      SQL equals `h3.cell_to_parent` on 20,000 sampled cells. Record the Python
+      requirements where `docs/data.md` describes a refresh.
+      (b) Bands: the pipeline's tier table is the one place band constants live
+      (`build_lods.py` `TIERS`, `build_tiles.py` `MIN_ZOOM`); move it to the rule "a tier
+      starts where its hexagon is 3 CSS px across flats at the equator". On deck.gl's
+      GlobeView px per km = 512·2^zoom / (2π·6371·cos lat), which puts the thresholds near
+      zoom 3.78 (r5), 5.18 (r6) and 7.99 (r8); r4 runs below, and until the r7 item lands
+      r6 runs to 7.99. Derive the numbers from that model and verify the model against
+      `GlobeViewport` in a unit test — do not type them in. Client selection is already
+      driven by the manifest, so it follows.
+      (c) `MAX_ZOOM` 7 → 10 (`src/lib/camera.ts`), so an r8 cell is ~12 px at full zoom.
+      Then walk everything that assumed 7 or the old 2.2 / 4.5 bands and move it: the zoom
+      ladder in `Controls.tsx`; the search fly-to default zoom (5 "so r8 streams in");
+      `maxColumnHeightM` over zoom 7–10 (report the tallest column in metres and in px at
+      zoom 5, 7, 8.5 and 10, and retune the profile if columns vanish — it must stay
+      continuous in zoom); any UI copy that names a zoom or a tier; the unit-test fixture
+      manifest; the headless scripts that navigate by zoom (`scripts/qa/tile_fail.mjs`
+      needs an r8 view, `scripts/qa/zoom_rebuild.mjs` a culled tier); and the plans in
+      `scripts/qa/render_qa.mjs` — samples and crossings must follow the new bands and
+      cover every tier that can render, with `--quick` kept under ~9 min.
+      (d) `scripts/verify_data.mjs` covers r5: Σ, cell count, file size, CRS bounds, every
+      r5 cell is the H3 parent of at least one r6 cell, every r6 cell's parent is present,
+      and each r5 population equals the sum of its r6 children.
+      (e) Docs that name the tiers, bands, sums or zoom range say the new truth:
+      `docs/architecture.md`, `docs/data.md`, `VISION.md`, `README.md`, and the tier sums
+      in `CLAUDE.md`'s invariants (this item may edit that paragraph).
+      Accept: (1) `npm run verify:data` ALL PASS with r5, and it fails when r5 is tampered
+      with (a dropped row; one changed population) — show both; (2) a unit test computes
+      the bands from the projection model and they equal the manifest's within 0.02 zoom,
+      and the model's px/km is within 1 % of `GlobeViewport`'s at lat 0 / 45 / 70 and zoom
+      2–10; (3) unit tests on the real band table: zoom 3 → r4, 4.5 → r5, 6 → r6, 9 → r8,
+      hysteresis intact at each threshold; the density domain is unchanged (the r8 peak,
+      55,163 people/km²) with the r5 maximum normalizing below 1; column height continuous
+      across every threshold up to zoom 10; (4) render gate green on the new plan: every
+      tier in the plan is reached, ≤ 120 k cells, 0 console errors, and the r8 sample is
+      at a zoom where r8 is the wanted tier; (5) the headless checks pass at their new
+      zooms (`tile_fail.mjs` in both modes, `zoom_rebuild.mjs`).
+      Gate: verify, qa:render, verify:data.
+- [ ] Cull window from the real footprint: `cullForView` sizes its window from
+      `halfSpanDeg = min(60, 180/2^zoom)`, which matches neither the canvas nor latitude.
+      Measured against `GlobeViewport` on 1280×800: at zoom 5.5 the screen edge is 10.5°
+      from the center at the equator (12.7° to a corner) against a window of 6°, so a
+      culled tier draws a disc about half as wide as the screen; at 70° N the same screen
+      reaches only 3.5° and the window over-selects. Add `src/lib/footprint.ts`: a tested
+      model of what GlobeView shows for a view and a canvas size — use deck.gl's
+      `GlobeViewport` itself (unproject the canvas border; the limb bounds it when the
+      globe is smaller than the canvas) or a closed form verified against it. Put the
+      canvas size in the store (a resize updates it). The cull then keeps what falls
+      inside the canvas rectangle grown by the re-cull margin — not a circle drawn around
+      it: a cap around a 16:10 canvas is ~3× its area and would spend the 120 k cap off
+      screen. Keep tick 4's rule: a cull's window is a function of its key and covers
+      every view on that key (position and zoom drift), with canvas size now part of the
+      key.
+      Accept: (a) unit tests against `GlobeViewport` for 1280×800, 1920×1080 and 375×812
+      at lat 0 / 45 / 70 / 85 over zoom 3.8–9: on an equal-area synthetic tier, every
+      front-facing cell that projects inside the canvas is selected, for the triggering
+      view and for sampled views sharing its key, whenever the selection is under the cap;
+      (b) tightness: the selection is ≤ 2.5× the on-screen count; (c) a Node script under
+      `scripts/bench/` on the committed r5 and r6 tiers reports, at each tier's entry zoom
+      over India, Tokyo, Lagos and São Paulo on 1280×800 and 1920×1080, on-screen cells vs
+      selected vs the cap — coverage is 100 % wherever on-screen ≤ 120 k, and every view
+      where on-screen exceeds 120 k is listed (it feeds the latitude/canvas item below);
+      (d) a canvas resize changes the cull key; (e) cull cost on the 2 M-cell r6 tier
+      within 2× of before, both numbers reported; (f) the gate's r5 and r6 screenshots
+      show columns out to the screen edges.
+      Gate: verify, qa:render.
+- [ ] Tile streaming for any tiled tier, tiles chosen from the footprint:
+      `useTileStreaming` and `selectActive` hard-code `'r8'`, the store has a single
+      `r8Data`, and `lib/tiles.ts` picks tiles with a `gridDisk` whose radius is
+      `halfSpanDeg / parentEdgeDeg` — and that table is ~6× too large (r3 listed as 3.4°;
+      the real mean edge is 59.8 km ≈ 0.54°), so the disk is too small on a wide canvas (at
+      zoom 8 a 1920×1080 screen spans about ±2.6° × ±1.5° at the equator; k = 1 reaches
+      ~1.4°). Generalize: one `TileStream` per tiled manifest entry with its own cache and
+      retry state, merged data per tier in the store, and a selection that walks from the
+      wanted tier down to the finest tier that has data, so the tier already on screen
+      keeps drawing while the next one's tiles load. Tiles = the parent cells (at the
+      entry's `tileParentRes`) that intersect the footprint, plus the prefetch ring.
+      Accept: unit tests prove (a) for 1280×800, 1920×1080 and 375×812 at zoom 8–10 and
+      lat 0 / 45 / 70, every r3 parent whose cell overlaps the canvas footprint is
+      selected, and the visible set plus the prefetch ring fits the 64-tile cache; (b) the
+      same code selects r2 parents for an entry declaring `tileParentRes: 2`; (c) with the
+      wanted tiled tier still loading, the previously drawn tier is the one selected, and
+      a cold deep-link falls back to the finest tier that is loaded; (d) the existing
+      tile-stream tests pass; (e) headless `tile_fail.mjs` passes in both modes, and at a
+      1920×1080 r8 view the gate screenshot shows columns to the screen edges.
+      Gate: verify, qa:render.
+- [ ] r7 tier, tiled by r2 parents: between r6 and r8 a cell otherwise grows from 3 px to
+      21 px before the 49× jump to r8. Pipeline (`pipeline/build_parents.py`): aggregate the
+      committed r8 tiles to their r7 parents (same vectorized method and schema as r5),
+      partition by r2 parent into `public/data/tiles/r7/` with an `index.json` like r8's
+      (r2 keeps a 1280×800 screen at the band's entry zoom within ~20 tiles; r3 would need
+      over 60), manifest entry with the band from the 3-px rule (≈ 6.59–7.99; r6 then ends
+      at 6.59). `verify:data` covers it: Σ, counts, every file < 100 MB, tile ↔ parent
+      roll-up, r7 ↔ r8 children sums. Client: nothing but the tier table should need to
+      change after the previous item — if more does, say what and why.
+      Accept: (1) `npm run verify:data` ALL PASS with five tiers and fails under tampering
+      (a deleted tile; a mislabelled parent); Σ r7 = Σ r8; (2) total added data and the
+      largest tile reported, every file < 100 MB, and the published site still under
+      GitHub Pages' 1 GB limit with the figure stated; (3) unit tests: zoom 7.2 → r7 on the
+      real band table, r6 → r7 → r8 crossings keep hysteresis, column height continuous;
+      (4) render gate green with an r7 sample and both crossings; ≤ 120 k cells; 0 console
+      errors.
+      Gate: verify, qa:render, verify:data.
+- [ ] Tier selection that follows latitude and canvas size: the bands are zoom thresholds
+      at the equator on a nominal canvas, but GlobeView scales by 1/cos(lat) — at 60° N a
+      cell is twice as wide on screen as the band assumes — and a larger canvas holds more
+      cells: at the 3-px threshold a fully populated 1920×1080 view is ~266 k cells, over
+      twice the cap, so top-k truncation returns on exactly the big desktop screens this
+      portfolio piece is judged on. Select by on-screen cell size at the view center
+      instead: the finest tier whose hexagon is at least max(3 px, √(canvas px ÷ (0.866 ×
+      a cell budget of ~100 k))) across, from the footprint model, with hysteresis kept.
+      The manifest's zoom bands stay as the nominal (equator, 3 px) values and a test pins
+      them to the model. Also load a whole tier only when it is wanted or about to be —
+      today every whole tier below the zoom is fetched, so a deep-link to zoom 9 would
+      download r5 and the 31 MB r6 for nothing — and start that load shortly before the
+      band so the crossing does not wait on it.
+      Accept: unit tests prove (a) at one zoom the selected tier steps finer as latitude
+      rises, at the latitude the model predicts, and coarser as the canvas grows; (b) at
+      the equator on a 1280×800 canvas selection equals the manifest's nominal bands;
+      (c) no flapping: a view parked on a threshold in zoom, latitude or canvas size does
+      not alternate tiers; (d) a cold deep-link to zoom 9 requests no whole tier other than
+      the overview, and approaching a whole tier's band from below requests it before the
+      threshold; (e) the bench from the cull item, re-run: no listed view exceeds the cap
+      on 1280×800 or 1920×1080.
+      Gate: verify, qa:render.
 - [ ] Night-lights basemap toggle: swap the dark-ocean sphere texture for NASA Black Marble
       (public domain) behind a `Controls.tsx` toggle; columns must stay legible
       (data > basemap).
@@ -70,46 +205,18 @@ cull-window, tile-selection, popping and cross-fade work waits there for it.
 
 ## Backlog (needs breakdown before queueing)
 
-- **DECISION NEEDED — the LOD bands switch ~3 zoom levels before their cells are visible.**
-  Measured 2026-11-17 against deck.gl 9.3's real `GlobeViewport` (1280×800, CSS px):
-  an r6 hexagon is **0.38–0.47 px** across when the mid tier switches on at zoom 2.2 and
-  does not reach 3 px until zoom ≈ 4.9–5.2; an r8 hexagon is **0.27–0.33 px** across when
-  r8 switches on at 4.5, is still only **1.5–1.9 px** at the maximum zoom of 7, and would
-  need zoom ≈ 7.7–8.0 to reach 3 px. Everything downstream is a symptom of drawing
-  sub-pixel prisms: far more cells fall on screen than the 120 k cap allows, so —
-  (1) **r8 covers a patch, not the screen.** At zoom 4.6 over Tokyo the 37 streamed tiles
-  reach ~3.3° from the center while a 900×560 canvas spans ±10°; the rest of Japan and
-  Korea render with no columns at all (`scripts/qa/out/tokyo-z4.60.png` after any gate
-  run). `lib/tiles.ts` also sizes its disk from a `parentEdgeDeg` table that is ~6× too
-  large (r3 listed as 3.4°; the real average edge is 59.8 km ≈ 0.54°). Covering that
-  screen with r8 would take ~100+ tiles and > 500 k cells — it cannot be done under the cap.
-  (2) **mid draws a truncated disc.** The cull window is 1.5 × `min(60, 180/2^zoom)`; the
-  real screen edge at lat 0 is 75° from center at zoom 2.3, 69° at zoom 3 and 36.6° at
-  zoom 4 (58° to a corner), against windows of 54.8°, 33.8° and 16.9°. Inside the window
-  top-k keeps the densest 120 k, so rural cells vanish. Toward the poles the window
-  over-selects instead (the projection scales by 1/cos(lat)): at (0°, 80° N, zoom 3) the
-  cap is spent south of the screen and 5 of 383 visible cells are drawn.
-  (3) the top-k set swaps on every re-cull (popping), each crossing replaces the whole
-  mesh with one 49× finer (the seam the cross-fade item papers over), and ~240 ms per
-  re-cull goes on boundaries for hexagons smaller than a pixel.
-  **Option A (recommended): band by on-screen cell size.** Pick the finest tier whose
-  hexagon is ≥ ~3 px: r4 from zoom ≈ 2.1–2.4, r5 ≈ 3.5–3.8, r6 ≈ 4.9–5.2, r7 ≈ 6.3–6.6,
-  r8 ≈ 7.7–8.0, and raise `maxZoom` to ~10 so a 400 m cell is ~12–15 px — legible and
-  pickable, which VISION promises and zoom 7 does not deliver. r5 and r7 are H3-parent
-  aggregations of the committed r6 / r8 (sum of population, parent centroid) — no
-  upstream download, Σ ≈ 8.03 B preserved by construction; r7 is tiled like r8. A
-  1280×800 screen then holds ≤ ~130 k cells, so the cap becomes a safety net instead of
-  a truncation, r8 streams 1–7 tiles per view, each tier step is 7× not 49×, and the
-  popping and cross-fade items mostly dissolve. Cost: two more tiers of data in the repo
-  and a different look — distinct hexagons instead of a sub-pixel texture.
-  **Option B: keep the bands, patch the symptoms.** Fit the cull window and the tile disk
-  to the real footprint, and composite r8 over mid (mid cells wherever no r8 tile is
-  loaded) so the screen is never blank. Keeps the current look, the sub-pixel geometry,
-  the truncation and the re-cull cost.
-  Either way the first building block is the same: a tested model of what GlobeView
-  shows (px per km and the visible region from zoom, latitude and canvas size), driving
-  the cull window, the tile disk and — under A — tier selection.
-- (held for the LOD decision) Cull-boundary popping: `cullForView` swaps its 120 k top-k set on each re-cull, so
+- **DECIDED 2026-11-18 — Option A: band the LOD tiers by on-screen cell size.** Measured
+  against deck.gl 9.3's real `GlobeViewport` (1280×800, CSS px), each tier switched on ~3
+  zoom levels before its cells were visible: an r6 hexagon was 0.38–0.47 px across at the
+  mid tier's zoom 2.2 and an r8 hexagon 0.27–0.33 px at 4.5 (1.5–1.9 px at the old maximum
+  zoom of 7). Drawing sub-pixel prisms put far more cells on screen than the 120 k cap
+  allows — the root of the r8 "patch" at zoom 4.6 (`tokyo-z4.60.png` in any gate run before
+  the change), the mid tier's truncated disc, the top-k popping and the seam at each
+  crossing. The rule now: a tier starts where its hexagon is ~3 px across; r5 and r7 are
+  H3-parent aggregations of the committed r6 / r8; the maximum zoom goes to 10 so a 400 m
+  cell is ~12 px. The five queue items above carry it out in order. Not chosen — Option B:
+  keep the bands and patch the symptoms.
+- (re-assess once Option A has landed — likely moot without top-k truncation) Cull-boundary popping: `cullForView` swaps its 120 k top-k set on each re-cull, so
   cells blink in/out at the window edge during a pan. Fade newly-added cells in over
   ~150 ms, or widen the scan window and stabilize the selection between adjacent cull
   keys (`lib/lod.ts`).
@@ -118,7 +225,7 @@ cull-window, tile-selection, popping and cross-fade work waits there for it.
   adjacent cull keys (no interior churn), with the cap and highest-density semantics
   preserved; a qa:render frame diff of a z 3–5 pan shows no blinking cells.
   Gate: verify, qa:render.
-- (held for the LOD decision) LOD cross-fade: with encoding now continuous across tiers (density domain +
+- (re-assess once Option A has landed — each tier step becomes 7× in area, not 49×) LOD cross-fade: with encoding now continuous across tiers (density domain +
   zoom-continuous height), the remaining seam at zoom 2.2/4.5 is purely geometric —
   22 km hexes are replaced by 3 km hexes in one frame. Render both tiers for ~250 ms
   at the crossing and cross-fade opacity (`layers/useGlobeLayers.ts`, driven off the
