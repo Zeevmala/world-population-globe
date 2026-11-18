@@ -74,7 +74,12 @@ something outside the session.
       would arrive far sooner as an intermediate.)
       Accept: unit tests prove (a) at one zoom the selected tier steps finer as latitude
       rises, at the latitude the model predicts, and coarser as the canvas grows; (b) at
-      the equator on a 1280×800 canvas selection equals the manifest's nominal bands;
+      the equator on a canvas small enough that the budget does not bind (the render
+      harness's 900×560) selection equals the manifest's nominal bands, and on 1280×800
+      and 1920×1080 each threshold moves later by exactly what the budget formula gives —
+      the shift stated in zoom and in px, and pinned by the test (a 1280×800 canvas over
+      India already holds 105 k cells on screen and a 160 k window at r5's nominal entry,
+      so it cannot keep the nominal bands and fit the cap);
       (c) no flapping: a view parked on a threshold in zoom, latitude or canvas size does
       not alternate tiers; (d) a cold deep-link to zoom 9 requests no whole tier other than
       the overview, and approaching a whole tier's band from below requests it before the
