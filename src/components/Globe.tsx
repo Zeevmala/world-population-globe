@@ -46,6 +46,7 @@ export function Globe() {
   const isDragging = useGlobeStore((s) => s.isDragging)
   const rotateBy = useGlobeStore((s) => s.rotateBy)
   const flyTarget = useGlobeStore((s) => s.flyTarget)
+  const setCanvas = useGlobeStore((s) => s.setCanvas)
   const reducedMotion = useReducedMotion()
   const [flying, setFlying] = useState(false)
   const [sharp, setSharp] = useState(false)
@@ -163,6 +164,8 @@ export function Globe() {
         sharp ? STILL_PIXEL_RATIO : MOTION_PIXEL_RATIO,
       )}
       onViewStateChange={(e) => setViewState(e.viewState as unknown as GlobeViewState)}
+      // The viewport cull keeps what this canvas shows, so its size is part of the cull key.
+      onResize={({ width, height }) => setCanvas(width, height)}
       onInteractionStateChange={(s: { isDragging?: boolean }) => {
         const dragging = !!s.isDragging
         setDragging(dragging)

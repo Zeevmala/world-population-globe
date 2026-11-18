@@ -27,6 +27,7 @@ export function useGlobeLayers(): Layer[] {
   const r8Data = useGlobeStore((s) => s.r8Data)
   const manifest = useGlobeStore((s) => s.manifest)
   const viewState = useGlobeStore((s) => s.viewState)
+  const canvas = useGlobeStore((s) => s.canvas)
   const isDragging = useGlobeStore((s) => s.isDragging)
   const activeLod = useGlobeStore((s) => s.activeLod)
   const setActiveLod = useGlobeStore((s) => s.setActiveLod)
@@ -43,10 +44,10 @@ export function useGlobeLayers(): Layer[] {
     setActiveLod(shownLod)
   }, [shownLod, setActiveLod])
 
-  const cullKey = cullKeyFor(lodData, viewState)
+  const cullKey = cullKeyFor(lodData, viewState, canvas)
   const cull = useMemo(
-    () => cullForView(lodData, viewState),
-    // cullKey encodes lodData + coarse view; recompute only when it changes.
+    () => cullForView(lodData, viewState, canvas),
+    // cullKey encodes lodData + coarse view + canvas size; recompute only when it changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [lodData, cullKey],
   )

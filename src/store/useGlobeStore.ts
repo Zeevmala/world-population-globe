@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type { GlobeViewState, HoverInfo, LodData, Manifest } from '../types'
+import type { Canvas } from '../lib/footprint'
 import { MAX_ZOOM, MIN_ZOOM, wrapLng } from '../lib/camera'
 import { arrivalZoom } from '../lib/tierPlan'
 import { parseHash } from '../lib/urlState'
@@ -59,6 +60,12 @@ interface GlobeStore {
   flyTarget: FlyTarget | null
   /** Tier currently on screen — feeds LOD hysteresis and the scale readout. */
   activeLod: string | null
+  /**
+   * The globe canvas's size in CSS px — part of the viewport cull's key, since the cull
+   * keeps what this canvas shows. Seeded from the window (the canvas fills it) and kept
+   * current by deck.gl's `onResize`.
+   */
+  canvas: Canvas
 
   setManifest: (m: Manifest) => void
   addData: (d: LodData) => void
@@ -69,6 +76,7 @@ interface GlobeStore {
   setViewState: (v: GlobeViewState) => void
   setDragging: (on: boolean) => void
   setActiveLod: (lod: string | null) => void
+  setCanvas: (width: number, height: number) => void
   rotateBy: (deg: number) => void
   zoomBy: (delta: number) => void
   flyTo: (lng: number, lat: number, zoom?: number) => void
@@ -90,6 +98,7 @@ export const useGlobeStore = create<GlobeStore>((set) => ({
   isDragging: false,
   flyTarget: null,
   activeLod: null,
+  canvas: { width: window.innerWidth, height: window.innerHeight },
 
   setManifest: (manifest) => set({ manifest }),
   addData: (d) => set((s) => ({ data: { ...s.data, [d.lod]: d } })),
@@ -104,6 +113,11 @@ export const useGlobeStore = create<GlobeStore>((set) => ({
   // Same idempotent-edge guard: written from a render effect, so it must not
   // re-enter when the tier is unchanged.
   setActiveLod: (lod) => set((s) => (s.activeLod === lod ? s : { activeLod: lod })),
+  // Same guard: deck.gl reports a size on every resize check, the cull re-runs only on a change.
+  setCanvas: (width, height) =>
+    set((s) =>
+      s.canvas.width === width && s.canvas.height === height ? s : { canvas: { width, height } },
+    ),
   rotateBy: (deg) =>
     set((s) => ({
       viewState: { ...s.viewState, longitude: wrapLng(s.viewState.longitude + deg) },

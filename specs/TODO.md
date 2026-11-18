@@ -42,40 +42,6 @@ Option A (decided 2026-11-18, see **Backlog**) comes first, as five items in dep
 order — each leaves the app coherent on its own. The two items after them each wait on
 something outside the session.
 
-- [ ] Cull window from the real footprint: `cullForView` sizes its window from
-      `halfSpanDeg = min(60, 180/2^zoom)`, which matches neither the canvas nor latitude.
-      Measured against `GlobeViewport` on 1280×800: at zoom 5.5 the screen edge is 10.5°
-      from the center at the equator (12.7° to a corner) against a window of 6°, so a
-      culled tier draws a disc about half as wide as the screen; at 70° N the same screen
-      reaches only 3.5° and the window over-selects. Add `src/lib/footprint.ts`: a tested
-      model of what GlobeView shows for a view and a canvas size — use deck.gl's
-      `GlobeViewport` itself (unproject the canvas border; the limb bounds it when the
-      globe is smaller than the canvas) or a closed form verified against it. Put the
-      canvas size in the store (a resize updates it). The cull then keeps what falls
-      inside the canvas rectangle grown by the re-cull margin — not a circle drawn around
-      it: a cap around a 16:10 canvas is ~3× its area and would spend the 120 k cap off
-      screen. Keep tick 4's rule: a cull's window is a function of its key and covers
-      every view on that key (position and zoom drift), with canvas size now part of the
-      key.
-      Accept: (a) unit tests against `GlobeViewport` for 1280×800, 1920×1080 and 375×812
-      at lat 0 / 45 / 70 / 85 over zoom 3.8–9: on an equal-area synthetic tier, every
-      front-facing cell that projects inside the canvas is selected, for the triggering
-      view and for sampled views sharing its key, whenever the selection is under the cap;
-      (b) tightness: the selection is ≤ 2.5× the on-screen count; (c) a Node script under
-      `scripts/bench/` on the committed r5 and r6 tiers reports, at each tier's entry zoom
-      over India, Tokyo, Lagos and São Paulo on 1280×800 and 1920×1080, on-screen cells vs
-      selected vs the cap — coverage is 100 % wherever on-screen ≤ 120 k, and every view
-      where on-screen exceeds 120 k is listed (it feeds the latitude/canvas item below);
-      (d) a canvas resize changes the cull key; (e) cull cost on the 2 M-cell r6 tier
-      within 2× of before, both numbers reported; (f) the gate's r5 and r6 screenshots
-      show columns out to the screen edges; (g) the stale-coverage test in `lod.test.ts`
-      sweeps the zooms culled tiers actually run at now (3.6–10), not 2.05–4.65.
-      While in the render harness, since (f) is read off its screenshots: dismiss the
-      first-run cue before capturing (it covers the middle of every shot), read the
-      maximum zoom from the app instead of retyping `MAX_ZOOM = 10`, fix the header's
-      count of sampled states, and make a budget-truncated run fail the "every planned
-      tier was reached" check instead of skipping it.
-      Gate: verify, qa:render.
 - [ ] Tile streaming for any tiled tier, tiles chosen from the footprint:
       `useTileStreaming` and `selectActive` hard-code `'r8'`, the store has a single
       `r8Data`, and `lib/tiles.ts` picks tiles with a `gridDisk` whose radius is
@@ -87,6 +53,9 @@ something outside the session.
       wanted tier down to the finest tier that has data, so the tier already on screen
       keeps drawing while the next one's tiles load. Tiles = the parent cells (at the
       entry's `tileParentRes`) that intersect the footprint, plus the prefetch ring.
+      While in the render harness: it now seeds the first-run cue as already seen, so
+      `FirstRunCue` is never mounted under the gate and an error in it would go unnoticed —
+      mount it once and dismiss it through its own button before the first capture.
       Accept: unit tests prove (a) for 1280×800, 1920×1080 and 375×812 at zoom 8–10 and
       lat 0 / 45 / 70, every r3 parent whose cell overlaps the canvas footprint is
       selected, and the visible set plus the prefetch ring fits the 64-tile cache; (b) the
@@ -122,7 +91,16 @@ something outside the session.
       twice the cap, so top-k truncation returns on exactly the big desktop screens this
       portfolio piece is judged on. Select by on-screen cell size at the view center
       instead: the finest tier whose hexagon is at least max(3 px, √(canvas px ÷ (0.866 ×
-      a cell budget of ~100 k))) across, from the footprint model, with hysteresis kept.
+      a cell budget))) across, from the footprint model, with hysteresis kept. The budget
+      is not the cap: the cull keeps a margin around the screen (window ÷ on-screen was
+      1.2–1.9× on the committed tiers, up to 2.5× on a synthetic one), and while the window
+      exceeds 120 k the cells kept depend on the view that triggered the cull — another
+      view on the same key then misses 3–7 % of its on-screen cells. So budget the WINDOW
+      under the cap (or shrink the margin and say what that costs in re-culls), and make
+      what is kept past the cap a function of the key alone. The bench's current offenders
+      are listed in the cull item's Done note. Since selection now depends on the canvas,
+      a window drag must not re-select and re-cull on every resize frame (today each one
+      re-culls and re-tessellates): quantize or debounce the canvas size.
       The manifest's zoom bands stay as the nominal (equator, 3 px) values and a test pins
       them to the model. Also load a whole tier only when it is wanted or about to be —
       today every whole tier below the zoom is fetched, so a deep-link to zoom 9 would
@@ -141,7 +119,10 @@ something outside the session.
       the overview, and approaching a whole tier's band from below requests it before the
       threshold; (e) the bench from the cull item, re-run: no listed view exceeds the cap
       on 1280×800 or 1920×1080; (f) a fly-to from the hero to a city requests only the
-      tiers it will stop in or fall back on, not every tier it crosses.
+      tiers it will stop in or fall back on, not every tier it crosses; (g) on the
+      committed tiers, for every bench view and sampled views sharing its key, 0 on-screen
+      cells are missing — the window fits the cap; (h) dragging the canvas from 1280×800
+      to 1300×820 in 1 px steps re-culls at most a handful of times, not once per step.
       Gate: verify, qa:render.
 - [ ] Night-lights basemap toggle: swap the dark-ocean sphere texture for NASA Black Marble
       (public domain) behind a `Controls.tsx` toggle; columns must stay legible
@@ -603,3 +584,77 @@ something outside the session.
       and the r8 tile disk 76–80 % at zoom 8 (100 % from zoom 9); those are the next two
       items. r5's lng/lat is the H3 cell center, the Kontur tiers' the reprojected polygon
       centroid — used for the cull only. The ladder labels r5 "9 km" (8.5 rounded).)*
+- [x] Cull window from the real footprint: `cullForView` sizes its window from
+      `halfSpanDeg = min(60, 180/2^zoom)`, which matches neither the canvas nor latitude.
+      Measured against `GlobeViewport` on 1280×800: at zoom 5.5 the screen edge is 10.5°
+      from the center at the equator (12.7° to a corner) against a window of 6°, so a
+      culled tier draws a disc about half as wide as the screen; at 70° N the same screen
+      reaches only 3.5° and the window over-selects. Add `src/lib/footprint.ts`: a tested
+      model of what GlobeView shows for a view and a canvas size — use deck.gl's
+      `GlobeViewport` itself (unproject the canvas border; the limb bounds it when the
+      globe is smaller than the canvas) or a closed form verified against it. Put the
+      canvas size in the store (a resize updates it). The cull then keeps what falls
+      inside the canvas rectangle grown by the re-cull margin — not a circle drawn around
+      it: a cap around a 16:10 canvas is ~3× its area and would spend the 120 k cap off
+      screen. Keep tick 4's rule: a cull's window is a function of its key and covers
+      every view on that key (position and zoom drift), with canvas size now part of the
+      key.
+      Accept: (a) unit tests against `GlobeViewport` for 1280×800, 1920×1080 and 375×812
+      at lat 0 / 45 / 70 / 85 over zoom 3.8–9: on an equal-area synthetic tier, every
+      front-facing cell that projects inside the canvas is selected, for the triggering
+      view and for sampled views sharing its key, whenever the selection is under the cap;
+      (b) tightness: the selection is ≤ 2.5× the on-screen count; (c) a Node script under
+      `scripts/bench/` on the committed r5 and r6 tiers reports, at each tier's entry zoom
+      over India, Tokyo, Lagos and São Paulo on 1280×800 and 1920×1080, on-screen cells vs
+      selected vs the cap — coverage is 100 % wherever on-screen ≤ 120 k, and every view
+      where on-screen exceeds 120 k is listed (it feeds the latitude/canvas item below);
+      (d) a canvas resize changes the cull key; (e) cull cost on the 2 M-cell r6 tier
+      within 2× of before, both numbers reported; (f) the gate's r5 and r6 screenshots
+      show columns out to the screen edges; (g) the stale-coverage test in `lod.test.ts`
+      sweeps the zooms culled tiers actually run at now (3.6–10), not 2.05–4.65.
+      While in the render harness, since (f) is read off its screenshots: dismiss the
+      first-run cue before capturing (it covers the middle of every shot), read the
+      maximum zoom from the app instead of retyping `MAX_ZOOM = 10`, fix the header's
+      count of sampled states, and make a budget-truncated run fail the "every planned
+      tier was reached" check instead of skipping it.
+      Gate: verify, qa:render.
+      *(Done 2026-11-18, factory tick 9, Option A step 2. `src/lib/footprint.ts` is a pure
+      closed-form model of deck.gl's GlobeViewport (perspective camera, the 85.05° latitude
+      clamp, the limb) — no deck.gl or h3-js import, so the entry chunk is unaffected
+      (220.16 → 220.31 kB). The cull keeps the canvas rectangle as projected, grown by the
+      drift margin of its re-cull bucket and cut at the horizon, tested per cell with three
+      dot products on cached float32 unit vectors. The key is `lod:WxH:iy:ix:zq` — view
+      center in Web Mercator steps of 1/6 of the canvas's shorter side (GlobeView scales
+      like Mercator, so a step is the same share of the screen at every latitude), zoom in
+      steps of 1/8. The canvas size reaches the cull from DeckGL's `onResize` via the store.
+      Evidence: the model agrees with GlobeViewport to < 0.01 px over 5,000+ points with 0
+      on/off-screen mismatches over ~24 k; the checker's own oracle (deck.gl's `project`
+      plus a front-facing test) over 900 triggering views — 5 canvases incl. 2560×600,
+      lat 0/±45/±70/±84/89.9, lng ±180, zoom 3.63–10 — and their same-key neighbours found
+      0 on-screen cells missing under the cap; tightness 1.8–2.5× at zoom ≥ 3.78. The old
+      cull missed 54–86 % of on-screen cells at the same views. On the committed tiers
+      (`node scripts/bench/cull_coverage.mjs --hysteresis`): 100 % coverage wherever
+      on-screen ≤ 120 k, three rows re-derived by the checker. Cull cost on r6: mean of
+      medians 3.80 ms, was 4.63 (0.52–1.38× per view); first cull of a tier 63 ms (r6) /
+      40 ms (r5) to build the vectors. Render gate green (196 tests, 220 s, 0 console
+      errors). Seen by the orchestrator at 1280×800 over India: r5 at zoom 4.2 (63,661
+      cells) and r6 at zoom 5.6 (67,155 cells) fill the screen edge to edge; headless
+      `zoom_rebuild.mjs` and `tile_fail.mjs` pass. Harness: the first-run cue is dismissed
+      before capture, the max zoom is read from the app, a budget-truncated run fails the
+      tier-coverage check. Checker PASS first time.
+      What the bench found, and it sets up the last item — views with more than 120 k
+      cells ON SCREEN at a tier's entry zoom: r5 at 3.78 on 1920×1080 over India 172,098
+      and Lagos 132,792; r6 at 5.18 on 1920×1080 over Lagos 155,672 and São Paulo 123,189;
+      and inside the hysteresis band, r5 at 3.63 on 1280×800 over India 132,937 (on
+      1920×1080: 195,751).
+      Known: (1) while the window holds more than the cap, which cells are kept depends on
+      the view that triggered the cull, so another view on the same key can miss 3–7 % of
+      its on-screen cells at its leading edge (r5 Lagos z3.78 1280×800: 7,701 of 113,789)
+      — the selection item must budget for the window, not just the screen; (2) tightness
+      reaches 2.51–2.59× inside the r5 hysteresis band (z3.63); (3) the unit vectors hold
+      ~29 MB for the session once r5 and r6 have been culled, built on the main thread;
+      (4) every resize frame re-culls (no debounce); zoom re-culls twice as often as
+      before (1/8 steps), pans about half as often at the equator; (5) r5 re-culls cost up
+      to 12.6 ms at its entry views (was 1.4) because it now selects 120 k cells where the
+      old window took 25 k; (6) the first-run cue is no longer mounted during render QA.
+      Not verified: frame cost of the extra cells on a real GPU.)*

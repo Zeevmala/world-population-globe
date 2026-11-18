@@ -1,16 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { cullForView, cullKeyFor, cullRadiusDeg, pickLod, selectActive } from './lod'
+import { _GlobeViewport as GlobeViewport } from '@deck.gl/core'
+import { cullForView, cullKeyFor, cullWindowCells, pickLod, selectActive } from './lod'
+import { MAX_LATITUDE, ZOOM_STEP, cullBucket, cullWindow } from './footprint'
+import type { Canvas } from './footprint'
 import { MANIFEST, makeLod, rng } from '../test/fixtures'
+import { CAP, DEG, LOCAL, RealProjection, checkCoverage, localTier, view } from '../test/cullHarness'
 import type { GlobeViewState, LodData } from '../types'
-
-/** The render cap (VISION: "any zoom renders ≤ 120 k culled cells/frame"). */
-const CAP = 120_000
-
-const view = (longitude: number, latitude: number, zoom: number): GlobeViewState => ({
-  longitude,
-  latitude,
-  zoom,
-})
 
 const tiny = (lod: string, h3Res: number): LodData => makeLod(lod, h3Res, 1, () => [0, 0, 1])
 
@@ -115,16 +110,20 @@ describe('selectActive', () => {
   })
 })
 
+const C1280: Canvas = { width: 1280, height: 800 }
+/** The canvas the render harness (`scripts/qa/render_qa.mjs`) drives. */
+const HARNESS: Canvas = { width: 900, height: 560 }
+
 describe('cullForView', () => {
   it('renders a tier at or under the cap whole', () => {
     const data = makeLod('overview', 4, 1000, (i) => [i % 360, 0, i])
-    const cull = cullForView(data, view(0, 0, 1))
+    const cull = cullForView(data, view(0, 0, 1), C1280)
     expect(cull.indices).toBeNull()
     expect(cull.key).toBe('overview:all')
   })
 
   it('caps a dense window at exactly the top-k by population', () => {
-    // 150 k cells, all inside the window (z3 → ±33.75°), with heavy ties.
+    // 150 k cells, all on screen (z3 on 1280×800 at the equator shows ±45° N–S), with heavy ties.
     const rand = rng(1)
     const n = 150_000
     const data = makeLod('mid', 6, n, () => [
@@ -132,7 +131,7 @@ describe('cullForView', () => {
       (rand() - 0.5) * 40,
       Math.floor(rand() * 5000),
     ])
-    const { indices } = cullForView(data, view(0, 0, 3))
+    const { indices } = cullForView(data, view(0, 0, 3), C1280)
     expect(indices).not.toBeNull()
     expect(indices!.length).toBe(CAP)
 
@@ -162,9 +161,9 @@ describe('cullForView', () => {
     const near = 125_000
     const far = 5_000
     const data = makeLod('mid', 6, near + far, (i) =>
-      i < near ? [(i % 100) * 0.1, ((i / 100) | 0) * 0.01, 10] : [0, 80, 1e6],
+      i < near ? [(i % 100) * 0.1, ((i / 100) | 0) * 0.01, 10] : [-170, 60, 1e6],
     )
-    const { indices } = cullForView(data, view(5, 5, 3))
+    const { indices } = cullForView(data, view(5, 5, 3), C1280)
     expect(indices!.length).toBe(CAP)
     for (const i of indices!) expect(i).toBeLessThan(near)
   })
@@ -175,291 +174,241 @@ describe('cullForView', () => {
     const data = makeLod('mid', 6, near + far, (i) =>
       i < near ? [(i % 100) * 0.1, ((i / 100) | 0) * 0.01, 10] : [170, -70, 1e6],
     )
-    const { indices } = cullForView(data, view(5, 5, 3))
+    const { indices } = cullForView(data, view(5, 5, 3), C1280)
     expect(indices!.length).toBe(near)
   })
 
-  it('wraps the longitude window across the antimeridian', () => {
+  it('wraps the window across the antimeridian', () => {
     const n = CAP + 10
     // Everything far away except two cells either side of ±180°.
     const data = makeLod('mid', 6, n, (i) =>
       i === 0 ? [-179.5, 0, 5] : i === 1 ? [179.5, 0, 5] : [0, 0, 1],
     )
-    const { indices } = cullForView(data, view(179.9, 0, 6))
+    const { indices } = cullForView(data, view(179.9, 0, 6), C1280)
     expect(Array.from(indices!).sort()).toEqual([0, 1])
+  })
+
+  it('past the cap, keeps every on-screen cell of the triggering view before the margin', () => {
+    // A window over the cap whose screen holds fewer than the cap: the margin's cells are
+    // the more populous, so a plain top-k over the window would drop on-screen cells.
+    const canvas = C1280
+    const v = view(77, 20, 5.2)
+    const tier = localTier(77, 20, 25, 42)
+    const real = new RealProjection(tier, LOCAL)
+    const on = new Set(real.onScreen(v, canvas))
+    // Densify: 40 k extra cells in the margin ring just past the screen, all very populous.
+    const rand = rng(43)
+    const extra = makeLod('mid', 6, tier.lng.length + 140_000, (i) => {
+      if (i < tier.lng.length) return [tier.lng[i], tier.lat[i], on.has(i) ? 1 : tier.population[i]]
+      // Uniform over a box around the screen; most fall in the margin, some on screen.
+      return [77 + (rand() - 0.5) * 30, 20 + (rand() - 0.5) * 20, 1e6]
+    })
+    const realX = new RealProjection(extra, extra.lng.length)
+    const onX = realX.onScreen(v, canvas)
+    expect(onX.length).toBeLessThan(CAP)
+    const { indices } = cullForView(extra, v, canvas)
+    expect(indices!.length).toBe(CAP) // the window holds more than the cap
+    const kept = new Set(indices!)
+    expect(kept.size).toBe(CAP)
+    expect(onX.filter((i) => !kept.has(i))).toEqual([]) // every on-screen cell, low population or not
+    // …and the rest of the cap went to the margin's most populous cells: nothing in the
+    // window left out outranks a margin cell kept. (Cells within half a pixel of the border
+    // may be promoted by the on-screen test's rounding slack; they are not margin.)
+    const onSet = new Set(realX.onScreen(v, canvas, 0.5))
+    let minMarginKept = Infinity
+    for (const i of indices!) if (!onSet.has(i)) minMarginKept = Math.min(minMarginKept, extra.population[i])
+    let maxDropped = -Infinity
+    for (const i of cullWindowCells(extra, v, canvas)) {
+      if (!kept.has(i)) maxDropped = Math.max(maxDropped, extra.population[i])
+    }
+    expect(minMarginKept).toBeGreaterThanOrEqual(maxDropped)
+    expect(minMarginKept).toBe(1e6)
+  })
+
+  it('past the cap with more than the cap on screen, selects nothing off screen', () => {
+    const canvas = C1280
+    const v = view(0, 0, 3.8)
+    const rand = rng(44)
+    // 360 k cells over ±60°: ~138 k on screen; the off-screen ones are the populous ones.
+    const data = makeLod('mid', 6, 360_000, () => [(rand() - 0.5) * 120, (rand() - 0.5) * 120, 1])
+    const real = new RealProjection(data, data.lng.length)
+    const on = new Set(real.onScreen(v, canvas))
+    for (let i = 0; i < data.lng.length; i++) if (!on.has(i)) data.population[i] = 1e6
+    expect(on.size).toBeGreaterThan(CAP)
+    const { indices } = cullForView(data, v, canvas)
+    expect(indices!.length).toBe(CAP)
+    // Half a pixel of rounding slack at the border may promote a cell; nothing farther out.
+    const near = new Set(real.onScreen(v, canvas, 0.5))
+    expect(indices!.filter((i) => !near.has(i)).length).toBe(0)
+  })
+
+  it('keeps a cell on the limb and drops one just behind it', () => {
+    // Zoom 3 on a 1280×800 canvas at the equator: the limb is inside the canvas left and
+    // right. Two cells on the equator, one 0.5° in front of the horizon, one 0.5° behind.
+    const k = new GlobeViewport({ ...C1280, longitude: 0, latitude: 0, zoom: 3 }).cameraPosition
+    const horizon = Math.acos(256 / Math.hypot(k[0], k[1], k[2])) / DEG
+    const n = CAP + 10
+    const data = makeLod('mid', 6, n, (i) =>
+      i === 0 ? [horizon - 0.5, 0, 5] : i === 1 ? [horizon + 40, 0, 5] : [180, 0, 1],
+    )
+    const { indices } = cullForView(data, view(0, 0, 3), C1280)
+    expect(Array.from(indices!)).toEqual([0])
   })
 })
 
-/** Great-circle distance in degrees (float64; acos argument clamped, so never NaN). */
-const DEG = Math.PI / 180
-function angDist(lng1: number, lat1: number, lng2: number, lat2: number): number {
-  const p1 = lat1 * DEG
-  const p2 = lat2 * DEG
-  const c = Math.sin(p1) * Math.sin(p2) + Math.cos(p1) * Math.cos(p2) * Math.cos((lng1 - lng2) * DEG)
-  return Math.acos(Math.max(-1, Math.min(1, c))) / DEG
-}
-
-/** The viewport's own angular half-extent at a zoom (what the cull window must cover). */
-const viewportAt = (zoom: number) => Math.min(60, 180 / 2 ** zoom)
-/** Boundary slack for float32 coordinates vs the float64 brute force (degrees). */
-const EPS = 1e-6
-
-describe('cullForView — spherical cap on an equal-area tier', () => {
-  // Uniform on the sphere: uniform in lng and in sin(lat) — equal cell counts per unit area.
-  // 300 k: above the 120 k cap (so the tier is culled at all) while the widest mid-tier
-  // window (zoom 2.05 → r = 67.5°, 31 % of the sphere) still holds fewer than the cap.
-  const N = 300_000
-  const rand = rng(7)
-  const sphere = makeLod('mid', 6, N, () => [
-    rand() * 360 - 180,
-    Math.asin(2 * rand() - 1) / DEG,
-    Math.floor(rand() * 1000),
-  ])
-
-  // Unit vectors (float64) for a trig-free brute force over all N cells.
-  const ux = new Float64Array(N)
-  const uy = new Float64Array(N)
-  const uz = new Float64Array(N)
-  for (let i = 0; i < N; i++) {
-    const p = sphere.lat[i] * DEG
-    const l = sphere.lng[i] * DEG
-    ux[i] = Math.cos(p) * Math.cos(l)
-    uy[i] = Math.cos(p) * Math.sin(l)
-    uz[i] = Math.sin(p)
-  }
-  /** Every cell strictly inside `radius` (less EPS) of the view center, by brute force. */
-  const brute = (v: GlobeViewState, radius: number): number[] => {
-    const p = v.latitude * DEG
-    const l = v.longitude * DEG
-    const cx = Math.cos(p) * Math.cos(l)
-    const cy = Math.cos(p) * Math.sin(l)
-    const cz = Math.sin(p)
-    const minDot = Math.cos((radius - EPS) * DEG)
-    const inside: number[] = []
-    for (let i = 0; i < N; i++) if (ux[i] * cx + uy[i] * cy + uz[i] * cz >= minDot) inside.push(i)
-    return inside
-  }
-
-  const views = [
-    view(0, 0, 3),
-    view(25, 68, 3),
-    view(-70, -45, 4),
-    view(179.9, 70, 3), // antimeridian at high latitude
-    view(-179.5, -60, 4),
-    view(10, 89.9, 3), // window crosses the north pole
-    view(0, 90, 4),
-    view(0, -90, 3),
-    view(77, 20, 2.2), // r ≈ 58.8°: wider than any culled tier's window (r5 from 3.63) — still under the cap
-    view(200, 30, 4), // un-normalized longitude
+describe('cullForView — the window is the real footprint (against GlobeViewport)', () => {
+  // (g) The memo key holds while the camera stays in one bucket — in position AND zoom — so
+  // the cull made at any view on a key must cover the screen of every other view on it:
+  // next to a pole, past the Mercator limit, at the antimeridian, at the bucket's corners
+  // and both ends of its zoom range. The zooms are the ones culled tiers run at since the
+  // re-band — r5 from 3.63 (its 3.78 entry less the hysteresis), mid, then the merged r8
+  // tiles up to MAX_ZOOM 10 — on the render harness's 900×560 canvas (the (a) sweep in
+  // `cullWindow.test.ts` covers 1280×800, 1920×1080 and 375×812).
+  const anchors = [
+    [0, 0],
+    [-40, 45],
+    [30, 70],
+    [-120, 84.9],
+    [10, 89.9], // past the Mercator limit: rendered (and keyed) at 85.05°
+    [60, -89.9],
+    [179.9, 45],
+    [-179.9, 0],
+    [179.8, -70],
   ]
+  it.each([3.63, 3.874, 4.4, 5.03, 5.6249, 6.6, 7.9, 8.6, 9.4, 10])(
+    '(g) a stale cull covers every view on its key at zoom %d — poles, antimeridian, bucket corners',
+    (z) => {
+      let views = 0
+      anchors.forEach(([lng, lat], k) => {
+        views += checkCoverage(view(lng, lat, z), HARNESS, 500 + k + 37 * z).views
+      })
+      expect(views).toBeGreaterThan(9 * 9)
+    },
+  )
 
-  it.each(views)('(a) keeps exactly the cells within the cap: %o', (v) => {
-    const r = cullRadiusDeg(v.zoom)
-    const { indices } = cullForView(sphere, v)
-    expect(indices!.length).toBeLessThan(CAP) // under the cap: nothing may be dropped
-    const kept = new Set(indices!)
-    expect(kept.size).toBe(indices!.length)
-    let outside = 0
-    for (const i of indices!) {
-      if (angDist(v.longitude, v.latitude, sphere.lng[i], sphere.lat[i]) > r + EPS) outside++
-    }
-    expect(outside).toBe(0)
-    const inside = brute(v, r)
-    expect(inside.length).toBeGreaterThan(1000)
-    expect(inside.filter((i) => !kept.has(i))).toEqual([])
+  it('covers the pole when it is on screen, at every longitude', () => {
+    // Below the culled zooms, but the model holds there too: at zoom 2.2 a view at the
+    // Mercator limit shows the pole, and the cull keeps the cells all around it.
+    const v = view(-20, 85, 2.2)
+    checkCoverage(v, C1280, 900, false)
+    const tier = localTier(0, 90, 0.5, 901) // a 0.5° patch around the pole: all of it on screen
+    const { indices } = cullForView(tier, v, C1280)
+    const bins = new Set<number>()
+    for (const i of indices!) bins.add(Math.floor((tier.lng[i] + 180) / 10))
+    expect(bins.size).toBe(36)
+    expect(indices!.length).toBe(LOCAL)
   })
 
-  it('(b) selects the same ground area at lat 0, 70 and 85 (within 15 %)', () => {
-    for (const z of [3, 4]) {
-      const at = (lat: number) => cullForView(sphere, view(30, lat, z)).indices!.length
-      const equator = at(0)
-      expect(equator).toBeGreaterThan(5_000) // dense enough for a 15 % comparison to mean something
-      for (const lat of [70, 85, -70, -85]) {
-        expect(Math.abs(at(lat) / equator - 1)).toBeLessThan(0.15)
-      }
-    }
-  })
-
-  it('(c) a view centered on a pole selects cells at every longitude', () => {
-    for (const v of [view(0, 90, 4), view(123, -90, 4), view(-45, 89.99, 3)]) {
-      const { indices } = cullForView(sphere, v)
-      const bins = new Set<number>()
-      for (const i of indices!) bins.add(Math.floor((sphere.lng[i] + 180) / 10))
-      expect(bins.size).toBe(36)
-    }
-  })
-
-  it('a pole-centered cull ignores the camera longitude', () => {
-    const a = cullForView(sphere, view(0, 90, 3)).indices!
-    const b = cullForView(sphere, view(137, 90, 3)).indices!
-    expect(Array.from(b)).toEqual(Array.from(a))
-  })
-
-  it('clamps to a hemisphere when zoomed far out, then caps by population', () => {
-    expect(cullRadiusDeg(0)).toBe(90)
-    const v = view(40, 50, 0)
-    const { indices } = cullForView(sphere, v)
-    expect(indices!.length).toBe(CAP) // ~200 k in the hemisphere → top-k
-    let outside = 0
-    for (const i of indices!) if (angDist(40, 50, sphere.lng[i], sphere.lat[i]) > 90 + EPS) outside++
-    expect(outside).toBe(0)
-  })
-
-  it('a stale cull still covers the viewport anywhere inside its re-cull bucket', () => {
-    // The memo key holds while the camera stays in one bucket — in position AND zoom — so
-    // the cull made at any view on a key must cover the viewport of every other view on
-    // that key: next to a pole, across it, at the antimeridian, zoomed out to the bucket's
-    // bottom edge. Zooms 2.05–4.65: the old mid band ± hysteresis, which now spans the
-    // first culled tier's (r5's) entry at 3.63. The deeper culled zooms (to 10) are the
-    // queue's cull-window-from-the-real-footprint item.
-    //
-    // The bucket's extent is found from the key itself (bisection along each axis), and its
-    // corners — where the worst pairs live — are tested along with random interior views.
-    const r2 = rng(11)
-    const keyOf = (lng: number, lat: number, z: number) => cullKeyFor(sphere, view(lng, lat, z))
-    /** Farthest offset along `dir` (≤ `max`) at which the key is still that of `at(0)`. */
-    const reach = (at: (t: number) => string, max: number): number => {
-      const k0 = at(0)
-      if (at(max) === k0) return max
-      let lo = 0
-      let hi = max
-      for (let i = 0; i < 50; i++) {
-        const mid = (lo + hi) / 2
-        if (at(mid) === k0) lo = mid
-        else hi = mid
-      }
-      return lo
-    }
-    const anchors = [
-      [0, 0],
-      [-40, 45],
-      [30, 70],
-      [-120, 85],
-      [10, 89.9],
-      [60, -89.9],
-      [10, 90],
-      [-75, -90],
-      [179.9, 45],
-      [-179.9, 0],
-      [179.8, -70],
-    ]
-    let pairs = 0
-    let worstSlack = -Infinity // max over same-key pairs of (d + viewport(z1)) − radius(key)
-    for (const z of [2.05, 2.3749, 2.875, 3.1249, 3.6, 4.1249, 4.4, 4.65]) {
-      for (const [lng, lat] of anchors) {
-        const latLo = lat - reach((t) => keyOf(lng, Math.max(-90, lat - t), z), 90)
-        const latHi = lat + reach((t) => keyOf(lng, Math.min(90, lat + t), z), 90)
-        const lngLo = lng - reach((t) => keyOf(lng - t, lat, z), 180)
-        const lngHi = lng + reach((t) => keyOf(lng + t, lat, z), 180)
-        const zLo = z - reach((t) => keyOf(lng, lat, z - t), 0.5)
-        const zHi = z + reach((t) => keyOf(lng, lat, z + t), 0.5)
-        const pts: GlobeViewState[] = []
-        for (const la of [latLo, latHi]) {
-          for (const ln of [lngLo, lngHi, (lngLo + lngHi) / 2]) {
-            for (const zz of [zLo, zHi]) pts.push(view(ln, Math.max(-90, Math.min(90, la)), zz))
-          }
-        }
-        for (let t = 0; t < 24; t++) {
-          const mix = (a: number, b: number) => a + (b - a) * r2()
-          pts.push(view(mix(lngLo, lngHi), Math.max(-90, Math.min(90, mix(latLo, latHi))), mix(zLo, zHi)))
-        }
-        const key0 = keyOf(lng, lat, z)
-        const same = pts.filter((p) => cullKeyFor(sphere, p) === key0)
-        let worst = { slack: -Infinity, from: same[0], to: same[0] }
-        for (const p0 of same) {
-          for (const p1 of same) {
-            pairs++
-            const d = angDist(p0.longitude, p0.latitude, p1.longitude, p1.latitude)
-            const slack = d + viewportAt(p1.zoom) - cullRadiusDeg(p0.zoom)
-            if (slack > worst.slack) worst = { slack, from: p0, to: p1 }
-          }
-        }
-        worstSlack = Math.max(worstSlack, worst.slack)
-        // …and, cell by cell, the worst pair's viewport is inside the stale set.
-        const kept = new Set(cullForView(sphere, worst.from).indices!)
-        expect(kept.size).toBeLessThan(CAP) // a miss below can only be geometry, not the top-k cap
-        const missing = brute(worst.to, viewportAt(worst.to.zoom)).filter((i) => !kept.has(i))
-        expect(missing).toEqual([])
-      }
-    }
-    expect(pairs).toBeGreaterThan(10_000)
-    // The farthest, most-zoomed-out same-key viewport fits inside the stale window.
-    expect(worstSlack).toBeLessThanOrEqual(1e-9)
-  })
-
-  it('regression: a zoom-out plus a diagonal move on one key stays covered', () => {
-    // Cull at the top of zoom bucket 3.00, reuse at its bottom, one position bucket's
-    // diagonal away. A radius from the triggering view's own zoom left a ~1.5° gap here.
-    const v0 = view(-2.81, 2.81, 3.1249)
-    const v1 = view(2.81, -2.81, 2.875)
-    expect(cullKeyFor(sphere, v1)).toBe(cullKeyFor(sphere, v0))
-    const d = angDist(v0.longitude, v0.latitude, v1.longitude, v1.latitude)
-    expect(d + viewportAt(v1.zoom)).toBeLessThanOrEqual(cullRadiusDeg(v0.zoom))
-    const kept = new Set(cullForView(sphere, v0).indices!)
-    expect(brute(v1, viewportAt(v1.zoom)).filter((i) => !kept.has(i))).toEqual([])
+  it('a regression pair: zoomed out at one bucket corner, culled at the opposite corner', () => {
+    // Cull at the top of a zoom bucket at the bucket's north-east corner, reuse at its
+    // bottom at the south-west corner: the widest drift a key allows.
+    const b = cullBucket(view(77, 20, 5.18), C1280)
+    const lngAt = (f: number) => ((b.ix + f) * b.q) / DEG
+    const latAt = (f: number) => Math.atan(Math.sinh((b.iy + f) * b.q)) / DEG
+    const v0 = view(lngAt(0.4999), latAt(0.4999), b.zq + ZOOM_STEP / 2 - 1e-4)
+    const v1 = view(lngAt(-0.5), latAt(-0.5), b.zq - ZOOM_STEP / 2)
+    const probe = makeLod('mid', 6, CAP + 1, () => [0, 0, 1])
+    expect(cullKeyFor(probe, v1, C1280)).toBe(cullKeyFor(probe, v0, C1280))
+    expect(cullKeyFor(probe, view(lngAt(-0.5), latAt(-0.5), b.zq - ZOOM_STEP / 2 - 1e-6), C1280)).not.toBe(
+      cullKeyFor(probe, v0, C1280),
+    )
+    const tier = localTier(77, 20, 25, 77)
+    const kept = new Set(cullForView(tier, v0, C1280).indices!)
+    const on = new RealProjection(tier, LOCAL).onScreen(v1, C1280)
+    expect(on.length).toBeGreaterThan(1000)
+    expect(on.filter((i) => !kept.has(i))).toEqual([])
   })
 
   it('sizes the window from the key, not from the view that triggered the cull', () => {
-    // Every zoom in one 0.25 bucket gets the same radius, hence the same cull.
-    expect(cullRadiusDeg(2.875)).toBe(cullRadiusDeg(3.1249))
-    const a = cullForView(sphere, view(20, 40, 2.875))
-    const b = cullForView(sphere, view(20, 40, 3.1249))
+    // Both ends of one zoom bucket (5 ± 1/16) get the same window, hence the same cull.
+    const tier = localTier(20, 40, 40, 3)
+    const a = cullForView(tier, view(20, 40, 5 - ZOOM_STEP / 2), C1280)
+    const b = cullForView(tier, view(20, 40, 5 + ZOOM_STEP / 2 - 1e-4), C1280)
     expect(b.key).toBe(a.key)
     expect(Array.from(b.indices!)).toEqual(Array.from(a.indices!))
+  })
+
+  it('no longer over-selects at high latitude: the window follows the screen, not a zoom-only radius', () => {
+    // Same zoom, same canvas: at 70° N the screen spans a third of the ground it spans at
+    // the equator (GlobeView scales by 1 / cos lat), and so does the window.
+    const tier0 = localTier(30, 0, 30, 1)
+    const tier70 = localTier(30, 70, 30, 1)
+    const n0 = cullForView(tier0, view(30, 0, 5.5), C1280).indices!.length
+    const n70 = cullForView(tier70, view(30, 70, 5.5), C1280).indices!.length
+    expect(n70 / n0).toBeGreaterThan(0.08)
+    expect(n70 / n0).toBeLessThan(0.16) // ≈ cos² 70° = 0.117
+  })
+
+  it('zoomed far out (a whole-globe key) stays finite and caps by population', () => {
+    const rand = rng(9)
+    const sphere = makeLod('mid', 6, 300_000, () => [
+      rand() * 360 - 180,
+      Math.asin(2 * rand() - 1) / DEG,
+      Math.floor(rand() * 1000),
+    ])
+    const { indices } = cullForView(sphere, view(40, 50, 0), C1280)
+    expect(indices!.length).toBe(CAP)
+    const w = cullWindow(cullBucket(view(40, 50, 0), C1280))
+    expect(Number.isFinite(w.cosCap)).toBe(true)
   })
 })
 
 describe('cullKeyFor', () => {
   const dense = makeLod('mid', 6, CAP + 1, () => [0, 0, 1])
+  const key = (v: GlobeViewState, canvas: Canvas = C1280) => cullKeyFor(dense, v, canvas)
 
   it('is "none" without data and "<lod>:all" for a whole-rendered tier', () => {
-    expect(cullKeyFor(undefined, view(0, 0, 3))).toBe('none')
-    expect(cullKeyFor(tiny('overview', 4), view(0, 0, 3))).toBe('overview:all')
+    expect(cullKeyFor(undefined, view(0, 0, 3), C1280)).toBe('none')
+    expect(cullKeyFor(tiny('overview', 4), view(0, 0, 3), C1280)).toBe('overview:all')
   })
 
   it('matches the key cullForView reports', () => {
     const v = view(12.3, 45.6, 3.2)
-    expect(cullForView(dense, v).key).toBe(cullKeyFor(dense, v))
+    expect(cullForView(dense, v, C1280).key).toBe(key(v))
   })
 
-  it('steps longitude by ground distance, not degrees, toward a pole', () => {
-    // z3 → quantum 5.625° of ground. A 5° longitude move is ~0.9 of a quantum at the
-    // equator (past the half-quantum bucket edge) but ~0.3 of one at 70° N, where a degree
-    // of longitude is a third as long.
-    expect(cullKeyFor(dense, view(5, 0, 3))).not.toBe(cullKeyFor(dense, view(0, 0, 3)))
-    expect(cullKeyFor(dense, view(5, 70, 3))).toBe(cullKeyFor(dense, view(0, 70, 3)))
-    expect(cullKeyFor(dense, view(5, -70, 3))).toBe(cullKeyFor(dense, view(0, -70, 3)))
-    // …while a ground-sized move still re-culls up there.
-    expect(cullKeyFor(dense, view(40, 70, 3))).not.toBe(cullKeyFor(dense, view(0, 70, 3)))
+  it('(d) changes on a canvas resize, by a single pixel either way', () => {
+    const v = view(77, 20, 5.5)
+    expect(key(v, { width: 1281, height: 800 })).not.toBe(key(v))
+    expect(key(v, { width: 1280, height: 801 })).not.toBe(key(v))
+    expect(key(v, { width: 900, height: 560 })).not.toBe(key(v))
+    expect(key(v, { width: 1280, height: 800 })).toBe(key(v))
   })
 
-  it('ignores longitude at a pole and is stable across the antimeridian', () => {
-    for (const z of [2.5, 3, 4.5]) {
-      const n = cullKeyFor(dense, view(0, 90, z))
-      for (const lng of [-180, -91, 37, 179.99, 540]) {
-        expect(cullKeyFor(dense, view(lng, 90, z))).toBe(n)
-        expect(cullKeyFor(dense, view(lng, 89.95, z))).toBe(n)
-      }
-      expect(cullKeyFor(dense, view(55, -90, z))).toBe(cullKeyFor(dense, view(-55, -89.95, z)))
-      expect(cullKeyFor(dense, view(0, -90, z))).not.toBe(n)
+  it('steps by screen distance, the same at every latitude', () => {
+    // A sixth of the 800 px side at zoom 5 is 133 px = 133 / (512·2^5) of 360° of longitude:
+    // GlobeView, like Web Mercator, draws a degree of longitude the same width at any latitude.
+    const stepDeg = (800 / 6 / (512 * 32)) * 360
+    for (const lat of [0, 45, 70, -80]) {
+      expect(key(view(0.45 * stepDeg, lat, 5))).toBe(key(view(0, lat, 5)))
+      expect(key(view(0.55 * stepDeg, lat, 5))).not.toBe(key(view(0, lat, 5)))
+    }
+  })
+
+  it('keys a latitude past the Mercator limit as the limit, and stays stable across the antimeridian', () => {
+    for (const z of [3.6, 5, 8]) {
+      expect(key(view(37, 90, z))).toBe(key(view(37, MAX_LATITUDE, z)))
+      expect(key(view(37, 89.95, z))).toBe(key(view(37, MAX_LATITUDE, z)))
+      expect(key(view(37, -90, z))).toBe(key(view(37, -MAX_LATITUDE, z)))
+      expect(key(view(37, -90, z))).not.toBe(key(view(37, 90, z)))
     }
     // ±180 (and 540) are one meridian, so one key.
-    expect(cullKeyFor(dense, view(180, 40, 3))).toBe(cullKeyFor(dense, view(-180, 40, 3)))
-    expect(cullKeyFor(dense, view(540, 40, 3))).toBe(cullKeyFor(dense, view(-180, 40, 3)))
+    expect(key(view(180, 40, 5))).toBe(key(view(-180, 40, 5)))
+    expect(key(view(540, 40, 5))).toBe(key(view(-180, 40, 5)))
   })
 
   it('ignores sub-quantum camera drift and reacts to a real move', () => {
-    // z3 → half-span 22.5°, quantum 5.625°.
-    const base = cullKeyFor(dense, view(0, 0, 3))
-    expect(cullKeyFor(dense, view(1, 1, 3))).toBe(base)
-    expect(cullKeyFor(dense, view(1, 1, 3.1))).toBe(base) // zoom quantized to 0.25
-    expect(cullKeyFor(dense, view(6, 0, 3))).not.toBe(base)
-    expect(cullKeyFor(dense, view(0, 0, 3.5))).not.toBe(base)
+    // z5 on 1280×800 → step 133 px ≈ 2.93° of longitude (bucket ±1.46°).
+    const base = key(view(0, 0, 5))
+    expect(key(view(1, 1, 5))).toBe(base)
+    expect(key(view(1, 1, 5.05))).toBe(base) // zoom quantized to 1/8
+    expect(key(view(2, 0, 5))).not.toBe(base)
+    expect(key(view(0, 0, 5.1))).not.toBe(base)
   })
 
   it('re-culls on a finer step as the camera zooms in', () => {
-    // The same 1° nudge is nothing at z3 and a real move at z6.
-    expect(cullKeyFor(dense, view(1, 0, 3))).toBe(cullKeyFor(dense, view(0, 0, 3)))
-    expect(cullKeyFor(dense, view(1, 0, 6))).not.toBe(cullKeyFor(dense, view(0, 0, 6)))
+    // The same 1° nudge is nothing at z5 and a real move at z8.
+    expect(key(view(1, 0, 5))).toBe(key(view(0, 0, 5)))
+    expect(key(view(1, 0, 8))).not.toBe(key(view(0, 0, 8)))
   })
 })

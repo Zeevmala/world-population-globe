@@ -1,4 +1,7 @@
 import type { GlobeViewState, LodData, LodEntry, Manifest } from '../types'
+// `.ts` extension: `scripts/bench/*.mjs` import this module under Node's native type stripping.
+import { bucketKey, cameraFor, cullBucket, cullWindow } from './footprint.ts'
+import type { Canvas } from './footprint.ts'
 
 /** Hard cap on rendered cells per frame for the dense tier (perf guard). */
 const MAX_RENDERED_CELLS = 120_000
@@ -57,53 +60,6 @@ export function selectActive(
   return { entry: manifest.lods.find((l) => l.lod === lod), data: lod ? loaded[lod] : undefined }
 }
 
-const DEG = Math.PI / 180
-
-/** Approximate angular half-extent (degrees) of the viewport at a globe zoom. */
-function halfSpanDeg(zoom: number): number {
-  return Math.min(60, 180 / Math.pow(2, zoom))
-}
-
-/** Zoom step of the re-cull key: a cull is reused for any zoom within ±0.125 of its bucket. */
-const ZOOM_STEP = 0.25
-
-/** The key's zoom bucket (center) for a camera zoom. */
-const quantizeZoom = (zoom: number) => Math.round(zoom / ZOOM_STEP) * ZOOM_STEP
-
-/** Re-cull position quantum (degrees of ground) for a zoom bucket ≈ halfSpan/4. */
-const positionQuantum = (zq: number) => Math.max(0.25, halfSpanDeg(zq) / 4)
-
-/**
- * Angular radius (degrees, great-circle) of the spherical cap {@link cullForView} keeps.
- * It is a function of the *key's* zoom bucket, not of the zoom of whichever view happened
- * to trigger the cull, because the cull is then reused for every view sharing that key
- * ({@link cullKeyFor}) — and all of their viewports must lie inside it.
- *
- * The bound: two views on one key have zooms in [zq − 0.125, zq + 0.125), so the widest
- * viewport is halfSpan(zq − 0.125); and their centers are at most D apart, where
- * D = 2·asin(√2·sin(q/2)) ≈ √2·q. (Same lat band: Δφ ≤ q; same lng bucket: Δλ·cos φ ≤ q at
- * the band's equatorward edge, where cos φ is largest. Haversine: hav d = hav Δφ +
- * cosφ₁cosφ₂·hav Δλ ≤ hav q + hav q, using c²·sin²(x/2) ≤ sin²(cx/2) for c ≤ 1. The polar
- * bucket is < q across.) A cap of radius halfSpan(zq − 0.125) + D around any of them
- * therefore covers the viewport of every other. That sum is ≈ 1.44·halfSpan(zq) while the
- * quantum is halfSpan/4, so the established 1.5·halfSpan(zq) margin is kept as the floor;
- * the sum only wins where the 0.25° quantum floor bites (zoom ≳ 9.5).
- *
- * Clamped to 90°: past a hemisphere is the far side of the globe, never on screen. (It
- * only binds at zoom ≲ 1.6, where the half-span is capped at 60°; the first culled tier,
- * r5, is not on screen below ≈ 3.6 — its 3.78 entry less the hysteresis band.)
- */
-export function cullRadiusDeg(zoom: number): number {
-  const zq = quantizeZoom(zoom)
-  const q = positionQuantum(zq)
-  const drift = (2 * Math.asin(Math.min(1, Math.SQRT2 * Math.sin((q / 2) * DEG)))) / DEG
-  const covering = halfSpanDeg(zq - ZOOM_STEP / 2) + drift
-  return Math.min(90, Math.max(1.5 * halfSpanDeg(zq), covering))
-}
-
-/** Latitude bins of the per-cull longitude half-width table (see {@link cullForView}). */
-const CAP_BINS = 2048
-
 /**
  * In-place iterative quickselect: rearrange `idx` so its first `k` entries are the
  * `k` highest-population cells (unordered within the k). O(n) average vs the
@@ -143,127 +99,174 @@ export interface CullResult {
 }
 
 /**
- * Cheap memo key for {@link cullForView}: stable while the active tier and the
- * coarsely-quantized camera are unchanged, so the heavy cull only re-runs when the
- * view has moved a meaningful fraction of the viewport — not on every drag tick.
- * The quantum scales with zoom (≈ halfSpan/4): zoomed out, a 1° nudge is nothing
- * and shouldn't re-cull; zoomed in, the same nudge is a big move and should. The
- * cull window ({@link cullRadiusDeg}) is sized from this key's buckets, so it covers
- * the viewport of every view that maps to the key — cells never pop at the edges in the
- * gap between re-culls, whether the camera drifted in position, zoom, or both.
- *
- * The quantum is a *ground* distance: latitude steps by `q` degrees, and longitude by
- * `q / cos(φ)` where φ is the bucket's most equatorward latitude — so a bucket is never
- * wider than `q` on the ground, and the re-cull cadence doesn't thrash as the camera
- * nears a pole. Within `q/2` of a pole the longitude is meaningless and dropped from
- * the key (one polar bucket, ≤ `q` across). The key holds bucket indices, and `q` is
- * derived from the *quantized* zoom, so one key is always one region of the globe.
+ * Memo key for {@link cullForView}: the tier, the canvas size and the camera's re-cull
+ * bucket ({@link cullBucket} — zoom in steps of 1/8, the view center in Web Mercator steps
+ * of a sixth of the canvas's shorter side). Stable while the camera drifts inside one
+ * bucket, so the cull re-runs only when the view has moved a real share of the screen — not
+ * on every drag tick — and on any canvas resize. The window is a function of this key
+ * alone ({@link cullWindow}) and covers the footprint of every view that maps to it, so
+ * cells never pop at the screen edges between re-culls, whatever the drift in position,
+ * zoom or both — while the window holds no more than the cap (past it, see
+ * {@link screenFirst}).
  */
-export function cullKeyFor(data: LodData | undefined, view: GlobeViewState): string {
+export function cullKeyFor(data: LodData | undefined, view: GlobeViewState, canvas: Canvas): string {
   if (!data) return 'none'
   if (data.h3.length <= MAX_RENDERED_CELLS) return `${data.lod}:all`
-  const zq = quantizeZoom(view.zoom)
-  const z = zq.toFixed(2)
-  const q = positionQuantum(zq)
-  const lat = Math.max(-90, Math.min(90, view.latitude))
-  if (90 - Math.abs(lat) < q / 2) return `${data.lod}:pole${lat > 0 ? 'N' : 'S'}:${z}`
-  const latIdx = Math.round(lat / q)
-  // Most equatorward latitude of this band (≤ 90 − q/2, so its cosine is ≥ sin(q/2) > 0).
-  const edge = Math.max(0, Math.abs(latIdx * q) - q / 2)
-  const qLng = q / Math.cos(edge * DEG)
-  const lng = ((((view.longitude + 180) % 360) + 360) % 360) - 180 // [-180, 180)
-  const lngIdx = Math.round(lng / qLng)
-  return `${data.lod}:${latIdx}:${lngIdx}:${z}`
+  return `${data.lod}:${bucketKey(cullBucket(view, canvas))}`
+}
+
+/**
+ * Per-tier unit vectors (three float32 columns) — what the cull tests instead of paying
+ * four trig calls per cell on every re-cull. Built once per tier object on its first cull
+ * and dropped with it (weak key). 12 B per cell: 4.7 MB for r5 (393,791 cells), 24.2 MB
+ * for mid (2,016,971 cells), 12 B × the merged cell count for an r8 tile set; no other
+ * tier is culled (the overview renders whole). Float32 places a cell within ~1 m.
+ */
+interface UnitColumns {
+  x: Float32Array
+  y: Float32Array
+  z: Float32Array
+}
+/** Bound on the rounding of a float32 unit vector's dot product with a float64 one (> 3 × 2⁻²⁴). */
+const F32_SLACK = 4e-7
+
+const unitColumns = new WeakMap<LodData, UnitColumns>()
+
+function unitVectors(data: LodData): UnitColumns {
+  let u = unitColumns.get(data)
+  if (u) return u
+  const { lng, lat } = data
+  const n = lng.length
+  u = { x: new Float32Array(n), y: new Float32Array(n), z: new Float32Array(n) }
+  const DEG = Math.PI / 180
+  for (let i = 0; i < n; i++) {
+    const p = lat[i] * DEG
+    const l = lng[i] * DEG
+    const cp = Math.cos(p)
+    u.x[i] = cp * Math.cos(l)
+    u.y[i] = cp * Math.sin(l)
+    u.z[i] = Math.sin(p)
+  }
+  unitColumns.set(data, u)
+  return u
+}
+
+/**
+ * Every cell of `data` inside the {@link cullWindow} of the view's key, before the cap —
+ * the window's own count, which `scripts/bench/cull_coverage.mjs` reports beside the
+ * capped selection.
+ *
+ * Cost (main thread, every re-cull, all cells of the tier): no per-cell trig — the test
+ * is three dot products against the tier's cached unit vectors ({@link unitVectors}):
+ * the cap's latitude band first (one float read rejects most of the globe), the cap, then
+ * the chart rectangle, compared without a division. Exact at the poles and across the
+ * antimeridian: nothing here is in longitude/latitude.
+ */
+export function cullWindowCells(data: LodData, view: GlobeViewState, canvas: Canvas): number[] {
+  const w = cullWindow(cullBucket(view, canvas))
+  const { x: ux, y: uy, z: uz } = unitVectors(data)
+  const n = ux.length
+  const [cx, cy, cz] = w.c0
+  const [ex, ey, ez] = w.e0
+  const [nx, ny, nz] = w.n0
+  const { kc, xMin, xMax, yMin, yMax } = w
+  // Both cap tests compare a cosine or a sine near ±1 — flat there, so the float32 unit
+  // vectors' rounding (≤ 3 × 2⁻²⁴ on a dot product) would be a visible share of a cap a
+  // fraction of a degree wide (zoom 10). They are widened by F32_SLACK; the rectangle,
+  // which is well conditioned, does the exact work.
+  const cosCap = w.cosCap - F32_SLACK
+  const lat0 = Math.asin(Math.max(-1, Math.min(1, cz)))
+  const cap = w.capDeg * (Math.PI / 180)
+  const zLo = lat0 - cap <= -Math.PI / 2 ? -2 : Math.sin(lat0 - cap) - F32_SLACK
+  const zHi = lat0 + cap >= Math.PI / 2 ? 2 : Math.sin(lat0 + cap) + F32_SLACK
+
+  const inside: number[] = []
+  for (let i = 0; i < n; i++) {
+    const z0 = uz[i]
+    if (z0 < zLo || z0 > zHi) continue
+    const x0 = ux[i]
+    const y0 = uy[i]
+    const d = x0 * cx + y0 * cy + z0 * cz
+    if (d < cosCap) continue
+    const depth = kc - d // > 0: kc > 1 ≥ d (a cap-only window has infinite bounds)
+    const x = x0 * ex + y0 * ey + z0 * ez
+    if (x < xMin * depth || x > xMax * depth) continue
+    const y = x0 * nx + y0 * ny + z0 * nz
+    if (y < yMin * depth || y > yMax * depth) continue
+    inside.push(i)
+  }
+  return inside
+}
+
+/**
+ * When the window holds more than the cap: the cells on screen for the view that
+ * triggered the cull come first, by population if even they exceed the cap; what is
+ * left of the cap goes to the drift margin, by population. Without this the top-k would
+ * trade cells in plain view for populous ones just past the edge — a view with fewer
+ * cells on screen than the cap would still show holes. The window stays a function of the
+ * key; only this split depends on the triggering view, and only while the cap binds.
+ *
+ * "On screen" is the footprint model's (`footprint.ts`, held to GlobeViewport), on the
+ * same float32 unit vectors, widened by half a pixel and {@link F32_SLACK} at the
+ * horizon so rounding can only promote a cell on the edge, never demote one.
+ */
+function screenFirst(
+  inside: number[],
+  u: UnitColumns,
+  population: Float32Array,
+  view: GlobeViewState,
+  canvas: Canvas,
+): Uint32Array {
+  const cam = cameraFor(view, canvas)
+  const [cx, cy, cz] = cam.c
+  const [ex, ey, ez] = cam.e
+  const [nx, ny, nz] = cam.n
+  const minDot = 1 / cam.k - F32_SLACK
+  const halfW = (cam.width / 2 + 0.5) / cam.f
+  const halfH = (cam.height / 2 + 0.5) / cam.f
+  const shown: number[] = []
+  const margin: number[] = []
+  for (const i of inside) {
+    const x0 = u.x[i]
+    const y0 = u.y[i]
+    const z0 = u.z[i]
+    const d = x0 * cx + y0 * cy + z0 * cz
+    const depth = cam.k - d
+    const x = x0 * ex + y0 * ey + z0 * ez
+    const y = x0 * nx + y0 * ny + z0 * nz
+    if (d >= minDot && Math.abs(x) <= halfW * depth && Math.abs(y) <= halfH * depth) shown.push(i)
+    else margin.push(i)
+  }
+  if (shown.length >= MAX_RENDERED_CELLS) return topKByPopulation(shown, population, MAX_RENDERED_CELLS)
+  const rest = topKByPopulation(margin, population, MAX_RENDERED_CELLS - shown.length)
+  const out = new Uint32Array(MAX_RENDERED_CELLS)
+  out.set(shown)
+  out.set(rest, shown.length)
+  return out
 }
 
 /**
  * Viewport cull for dense tiers. The coarse overview tier (71k cells) renders whole;
- * finer tiers keep the cells inside a spherical cap — great-circle distance from the view
- * center ≤ {@link cullRadiusDeg} — capped to the highest-population cells. A cap, not a
- * lng/lat degree box: a degree of longitude shrinks by cos(lat), so a box is too narrow on
- * the ground at high latitude and misses the far side of a pole. The cap is exact at the
- * poles and across the antimeridian by construction.
- *
- * Cost (main thread, every re-cull, all 2 M mid cells): no per-cell trig on the hot path.
- * A cell is in the cap iff `cosΔλ·cosφc·cosφ ≥ cos r − sinφc·sinφ`, i.e. iff its longitude
- * offset Δλ ≤ Λ(φ), the cap's half-width at the cell's latitude. The latitude band
- * `|φ − φc| ≤ r` is the first prefilter and Δλ ≤ max Λ (the cap's bounding box) the
- * second; past both, a {@link CAP_BINS}-bin table holds, per latitude bin, a lower and an
- * upper bound of Λ over the bin. Δλ ≤ lower → in, Δλ > upper → out, and only the thin
- * sliver between (cells right at the cap's rim) pays the exact trig test. The table is
- * 2 × 2048 float64 (32 KB) per re-cull; no per-cell columns are added.
+ * finer tiers keep the cells inside the key's {@link cullWindow} — the canvas rectangle,
+ * as GlobeView projects it, grown by the margin the camera may drift before the next
+ * re-cull, and cut at the horizon ({@link cullWindowCells}). The rectangle, not a circle
+ * around it: a cap around a 16:10 canvas is ~3× its area and would spend the 120 k cap
+ * off screen. Past the cap, the triggering view's on-screen cells come first, then the
+ * margin, each by population ({@link screenFirst}); the top-k still sees plain index lists.
  */
-export function cullForView(data: LodData | undefined, view: GlobeViewState): CullResult {
+export function cullForView(
+  data: LodData | undefined,
+  view: GlobeViewState,
+  canvas: Canvas,
+): CullResult {
   if (!data) return { indices: null, key: 'none' }
   if (data.h3.length <= MAX_RENDERED_CELLS) {
     return { indices: null, key: `${data.lod}:all` }
   }
-
-  const rDeg = cullRadiusDeg(view.zoom)
-  const { lng, lat, population } = data
-  const cLat = Math.max(-90, Math.min(90, view.latitude))
-  const cLng = ((((view.longitude + 180) % 360) + 360) % 360) - 180 // [-180, 180): |Δ| ≤ 360
-  const cosR = Math.cos(rDeg * DEG)
-  const sinC = Math.sin(cLat * DEG)
-  const cosC = Math.cos(cLat * DEG)
-
-  // Cap half-width in longitude (degrees) at latitude φ: 180 when the whole parallel is
-  // inside (a pole in the cap), −1 when none of it is. Both cases are decided before the
-  // division, so a center on a pole (cosC ≈ 0) or a parallel at a pole (cosφ ≈ 0) can't
-  // divide by ~0, and acos only ever sees an argument inside [−1, 1] — no NaN.
-  const halfWidth = (phiDeg: number): number => {
-    const num = cosR - sinC * Math.sin(phiDeg * DEG)
-    const den = cosC * Math.cos(phiDeg * DEG)
-    if (num <= -den) return 180
-    if (num > den) return -1
-    return Math.acos(num / den) / DEG
-  }
-
-  const bandLo = Math.max(-90, cLat - rDeg)
-  const bandHi = Math.min(90, cLat + rDeg)
-  const binW = (bandHi - bandLo) / CAP_BINS
-  const invBinW = binW > 0 ? 1 / binW : 0
-  // Λ is unimodal in φ (0 at the band edges, peak where the cap's rim runs along a
-  // meridian, sinφ* = sinφc / cos r — or monotone up to 180 when the cap holds a pole),
-  // so its minimum over a bin is at an endpoint and its maximum at an endpoint or φ*.
-  const sPeak = sinC / cosR
-  const phiPeak = Math.abs(sPeak) < 1 ? Math.asin(sPeak) / DEG : NaN
-  const lower = new Float64Array(CAP_BINS)
-  const upper = new Float64Array(CAP_BINS)
-  let prev = halfWidth(bandLo)
-  let widest = -1 // max Λ over the band: the cap's lng/lat bounding box, a second cheap reject
-  for (let k = 0; k < CAP_BINS; k++) {
-    const a = bandLo + k * binW
-    const b = k === CAP_BINS - 1 ? bandHi : a + binW
-    const next = halfWidth(b)
-    lower[k] = Math.min(prev, next)
-    const hi = Math.max(prev, next)
-    upper[k] = phiPeak >= a && phiPeak <= b ? Math.max(hi, halfWidth(phiPeak)) : hi
-    if (upper[k] > widest) widest = upper[k]
-    prev = next
-  }
-
-  const visible: number[] = []
-  for (let i = 0; i < lat.length; i++) {
-    const phi = lat[i]
-    if (phi < bandLo || phi > bandHi) continue
-    let d = Math.abs(lng[i] - cLng)
-    if (d > 180) d = 360 - d
-    if (d > widest) continue
-    let k = ((phi - bandLo) * invBinW) | 0
-    if (k >= CAP_BINS) k = CAP_BINS - 1
-    if (d <= lower[k]) visible.push(i)
-    else if (d <= upper[k]) {
-      // Exact test for the rim sliver: cosΔλ·cosφc·cosφ ≥ cos r − sinφc·sinφ.
-      const p = phi * DEG
-      if (Math.cos(d * DEG) * cosC * Math.cos(p) >= cosR - sinC * Math.sin(p)) visible.push(i)
-    }
-  }
-
+  const inside = cullWindowCells(data, view, canvas)
   const indices =
-    visible.length > MAX_RENDERED_CELLS
-      ? topKByPopulation(visible, population, MAX_RENDERED_CELLS)
-      : Uint32Array.from(visible)
-
-  return { indices, key: cullKeyFor(data, view) }
+    inside.length > MAX_RENDERED_CELLS
+      ? screenFirst(inside, unitVectors(data), data.population, view, canvas)
+      : Uint32Array.from(inside)
+  return { indices, key: cullKeyFor(data, view, canvas) }
 }

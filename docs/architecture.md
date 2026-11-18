@@ -114,6 +114,7 @@ src/
   lib/
     density.ts          # cell area per H3 res, people/km², shared cross-tier domain
     lod.ts              # pickLod() + selectActive() + hysteresis + cullForView() + quickselect cap
+    footprint.ts        # what GlobeView shows for a view + canvas; the cull's key and window
     tierPlan.ts         # wholeTierFor() (which whole tier to fetch) + arrivalZoom() (search fly-to zoom)
     screenScale.ts      # GlobeView px/km + hexagon width — the model the bands are cut from
     zoomLadder.ts       # the zoom ladder's tier bands + cell-size labels, from the manifest
@@ -121,7 +122,7 @@ src/
     scales.ts           # zoom-continuous column height + earth constants
     colorRamp.ts        # Inferno ramp (RGB + CSS)
     format.ts           # population / lat-lng formatting
-  store/useGlobeStore   # Zustand: manifest, data, viewState, hover, autoRotate, status
+  store/useGlobeStore   # Zustand: manifest, data, viewState, canvas size, hover, autoRotate, status
 ```
 
 ### Rendering & cartographic rules
@@ -158,8 +159,10 @@ src/
 - **Color** — Inferno (perceptually uniform). Rainbow/jet is banned (fabricates breaks).
 - **Performance budget**
   - overview (71 k): rendered whole.
-  - r5 (394 k) and mid (2 M): **viewport-culled** to a zoom-scaled spherical cap, capped at 120 k
-    highest-population cells/frame; cull memoized on a coarse view key (no per-tick recompute).
+  - r5 (394 k) and mid (2 M): **viewport-culled** to what the canvas actually shows
+    (`lib/footprint.ts`), capped at 120 k cells/frame — on-screen cells first, then by
+    population; cull memoized on a coarse view key that includes the canvas size (no per-tick
+    recompute).
   - r8 (33 M total): only the visible r3 tiles are fetched, merged, then viewport-culled + capped
     at 120 k/frame — so render cost is bounded regardless of global cell count.
   - Data is **columnar typed arrays** + deck.gl non-iterable `{length}` accessors → no per-cell objects.
@@ -206,17 +209,38 @@ src/
     2^18 cells ≈ 32 MB, fresh plain-array output (a small `Float64Array` costs ~0.8 µs to allocate in
     V8). Geometry is held bit-identical to deck.gl's `h3ToPolygon` + `flattenPolygon`, cold and warm.
     Repeat-cull boundary cost on the mid tier dropped 11–15× (`scripts/bench/boundary_bench.mjs`).
-  - **Re-cull cadence** — `cullKeyFor` quantizes the camera to a zoom-relative step (`halfSpan/4`)
-    so the dense-tier cull re-runs ~5–10× less often than the old fixed 1°; `cullForView` keeps a
-    spherical cap whose radius (`cullRadiusDeg`) is a function of the *key* — `1.5×halfSpan` of
-    the key's zoom bucket, at least the bucket's widest viewport plus its position-bucket
-    diagonal — so the cull covers every view that reuses it, drifted in position and zoom, and fills
-    the 120 k cap via an O(n) quickselect (`topKByPopulation`) instead of an O(n log n) sort of
-    ~1 M indices. The window is a great-circle cap, not a lng/lat degree box (a box is cos(lat)
-    too narrow on the ground at high latitude and misses the far side of a pole), and the key's
-    longitude step is a ground distance (`q / cos φ`, dropped within `q/2` of a pole). The cap
-    test stays trig-free per cell: latitude band + bounding box, then a per-cull 2048-bin table
-    of the cap's half-width in longitude; only cells on the rim pay the exact test.
+  - **Cull window = the real footprint** (replaced the zoom-only cap, whose `min(60, 180/2^zoom)`
+    radius matched neither the canvas nor the latitude: at zoom 5.5 on 1280×800 it drew a disc
+    about half as wide as the screen at the equator and over-selected ~3× at 70° N).
+    `lib/footprint.ts` is a closed form of deck.gl's `GlobeViewport` (eye on the radius through
+    the view center at `1 + 1.5·π·H·cos lat / (256·2^zoom)` globe radii, focal length 1.5·H px,
+    latitude clamped to ±85.0511°; held to the viewport's own project/unproject within 0.01 px
+    in `footprint.test.ts`). On screen = in front of the horizon (`u·c ≥ 1/k`) and projected
+    inside the canvas. **Key**: tier, canvas W×H, zoom in steps of 1/8, view center in Web
+    Mercator steps of 1/6 of the canvas's shorter side — Mercator because GlobeView scales
+    the view center exactly like it, so one step is the same share of the screen at every
+    latitude. **Window** (a function of the key alone): the union of the footprints of every
+    view on the key — sampled bucket centers at the bucket's lowest zoom (a footprint only
+    shrinks as zoom rises), their boundaries mapped into one perspective chart at the bucket
+    center and bounded there (the canvas rectangle grown by the measured drift), cut by a cap
+    of (center distance + footprint reach), +1 % slack. The rectangle, not a circle: a cap
+    around a 16:10 canvas is ~3× its area. Test: under the cap, every cell deck.gl draws for
+    any view sharing the key is kept (lat 0–85, zoom 3.6–10, three canvases, poles,
+    antimeridian), and the selection is ≤ 2.5× the on-screen count. The zoom step went from
+    0.25 to 1/8 for that bound: at the r5 entry over mid-latitudes the footprint's area grows
+    1.8× across a 0.25 zoom step (its corners sit near the limb). When the window holds more
+    than the cap (each part capped by an O(n) quickselect on population, `topKByPopulation`),
+    the triggering view's on-screen cells come first, so the view that triggered the cull
+    is drawn complete whenever it has ≤ 120 k cells on screen
+    (`scripts/bench/cull_coverage.mjs`). That is not yet true of every other view on the
+    same key: while the window exceeds the cap, the cells left out are the least populated
+    ones in the margin, and a view that has drifted toward that margin can be missing 3–7 %
+    of its on-screen cells until the next re-cull (measured on r5 and r6 at their entry
+    zooms). The window only fits the cap everywhere once tier selection budgets for the
+    margin — see the selection item in `specs/TODO.md`. Per cell the test
+    is three dot products on cached float32 unit vectors (12 B/cell: 24 MB for mid, 4.7 MB for
+    r5, built once per tier object on its first cull, ~50 ms for mid) — no per-cell trig;
+    a re-cull of mid costs about what the old cap did (`scripts/bench/cull_bench.mjs`).
   - **Idle tile prefetch** — after the visible r8 tiles merge, a `requestIdleCallback` warms the
     `gridDisk` k+1 ring into the LRU cache (no `setR8Data`, so no rebuild), with visible-protecting
     eviction — so panning reveals ready tiles instead of empty gaps.

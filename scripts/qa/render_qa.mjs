@@ -39,9 +39,9 @@
  *   --frames / --anim-ms  per-sample animation length (default 24 frames, 1200 ms cap)
  *   --settle-timeout <n>  per-sample settle cap (default 60000)
  *
- * The bands, crossings and sample zooms are derived from public/data/manifest.json. With
- * the four-tier manifest a full run samples 12 camera states plus the three cold tier
- * crossings. On a GPU that is quick; under SwiftShader on a contended box expect 10-20
+ * The bands, crossings and sample zooms are derived from public/data/manifest.json, and
+ * the deepest zoom from the app itself. With the four-tier manifest a full run samples 11
+ * camera states plus the three cold tier crossings (the run prints its plan's counts). On a GPU that is quick; under SwiftShader on a contended box expect 10-20
  * minutes, so --quick (the gate's plan) exists and --budget-ms bounds the worst case.
  *
  * Exit: 0 pass · 1 regression/defect · 2 harness error.
@@ -75,6 +75,7 @@ import {
   printSummary,
   worstStall,
 } from './report.mjs'
+import { MAX_ZOOM as APP_MAX_ZOOM } from '../../src/lib/camera.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = resolve(HERE, '..', '..')
@@ -94,10 +95,31 @@ const REGIONS = {
  */
 let BANDS = []
 
-/** The deepest zoom the camera allows (`src/lib/camera.ts` MAX_ZOOM). */
-const MAX_ZOOM = 10
+/**
+ * The deepest zoom the camera allows: read from the running app (the store's
+ * `viewState.maxZoom`, which is `src/lib/camera.ts` MAX_ZOOM) once it has booted, and
+ * from that module itself when the target has no `__globe` handle. Set in `main`.
+ */
+let MAX_ZOOM = APP_MAX_ZOOM
 /** The desktop hero zoom (`src/store/useGlobeStore.ts`). */
 const HERO_ZOOM = 1.3
+
+/**
+ * The first-run cue (`src/components/FirstRunCue.tsx`) covers the middle of every shot.
+ * `App.tsx` remembers its dismissal in localStorage under `INTRO_KEY` (written by the
+ * card's Dismiss button, its close-on-first-pick and Escape) — seeding that key before
+ * boot is the app's own "already dismissed". The key is read from the source, so a bump
+ * of it (v1 → v2, to re-show changed copy) cannot quietly bring the card back into the shots.
+ */
+function introKey(root) {
+  const src = readFileSync(join(root, 'src', 'App.tsx'), 'utf8')
+  const m = src.match(/const INTRO_KEY = '([^']+)'/)
+  if (!m) throw new Error('INTRO_KEY not found in src/App.tsx — update render_qa.mjs introKey()')
+  return m[1]
+}
+
+/** The cue's landmark (`FirstRunCue.tsx`). */
+const CUE_SELECTOR = 'section[aria-label="How to read this globe"]'
 
 function loadBands(root) {
   const manifest = JSON.parse(readFileSync(join(root, 'public', 'data', 'manifest.json'), 'utf8'))
@@ -111,8 +133,9 @@ function expectedTier(zoom) {
   return tier
 }
 
-/** Angular half-extent of the viewport, mirroring `lib/lod.ts` — used to size a
- *  pan step so every zoom level gets a comparable amount of camera motion. */
+/** A zoom-scaled angular step — the old cull's `min(60, 180/2^zoom)` half-span, kept as it
+ *  was only so pan magnitudes stay comparable with recorded baselines — used to size a pan
+ *  step so every zoom level gets a comparable amount of camera motion. */
 const halfSpanDeg = (zoom) => Math.min(60, 180 / Math.pow(2, zoom))
 
 const round2 = (z) => Math.round(z * 100) / 100
@@ -305,6 +328,14 @@ async function settleAt(page, ctx, { tier, timeoutMs, quietMs = 5000 }) {
 /** Screenshot + decode + score. A PNG that scores blank is a failure, not a file. */
 async function capture(page, opts, id, findings) {
   if (!opts.screenshots) return null
+  // Belt and braces for the seeded dismissal (see `introKey`): a cue on screen is closed
+  // through its own Dismiss button, and reported, before the shot.
+  const cue = page.locator(CUE_SELECTOR)
+  if (await cue.count()) {
+    findings.warnings.push(`${id}: the first-run cue was on screen despite the seeded dismissal — closed before capture`)
+    await cue.getByRole('button', { name: 'Dismiss' }).click().catch(() => {})
+    await page.waitForSelector(CUE_SELECTOR, { state: 'detached', timeout: 5000 }).catch(() => {})
+  }
   const path = join(opts.out, `${id.replace(/[^a-z0-9._-]+/gi, '-')}.png`)
   await page.screenshot({ path })
   const score = await scorePngFile(path)
@@ -360,6 +391,13 @@ async function main() {
   if (!preflight.ok) findings.failures.push(`headless WebGL2 preflight failed: ${preflight.reason || 'cleared pixel mismatch'}`)
 
   await page.addInitScript(PROBE_INIT)
+  await page.addInitScript((key) => {
+    try {
+      localStorage.setItem(key, 'seen')
+    } catch {
+      /* storage unavailable: the capture-time check below dismisses the card instead */
+    }
+  }, introKey(opts.url ? REPO_ROOT : opts.root))
 
   const ctx = { phase: 'boot', inFlight: 0, lastNetworkAt: Date.now() }
   const consoleErrors = []
@@ -408,6 +446,11 @@ async function main() {
       'window.__globe / window.__deck are absent — this is a production build, so tier/cell oracles and camera driving are unavailable (see LIMITATIONS).',
     )
   }
+  if (hasHandles) {
+    const appMax = await page.evaluate(() => window.__globe.getState().viewState.maxZoom)
+    if (Number.isFinite(appMax)) MAX_ZOOM = appMax
+  }
+  log(`max zoom: ${MAX_ZOOM} (${hasHandles ? 'from the running app' : 'from src/lib/camera.ts'})`)
   const bootMs = Date.now() - bootAt
   const bootLongtasks = await page.evaluate(collectLongtasks)
   log(`boot: ${bootMs} ms, handles=${hasHandles}, longtask support=${bootLongtasks.supported}`)
@@ -424,6 +467,9 @@ async function main() {
 
   // ---- run the plan -------------------------------------------------------
   const plan = buildPlan(opts.quick)
+  log(
+    `plan: ${plan.filter((st) => st.type === 'sample').length} sampled state(s) + ${plan.filter((st) => st.type === 'crossing').length} tier crossing(s)`,
+  )
   const samples = []
   const crossings = []
   let truncated = null
@@ -596,8 +642,10 @@ async function main() {
 
   // Every tier the plan sends a dense region into must actually have been on screen at
   // least once (a sample's settled tier or a crossing's far side). A tier that never
-  // shows up anywhere in the run is a band the app cannot reach, not a slow machine.
-  if (driveable && !truncated) {
+  // shows up anywhere in the run is a band the app cannot reach, not a slow machine — and
+  // a run that ran out of --budget-ms before reaching it has not shown it either, so a
+  // truncated run fails here too rather than passing on the steps it happened to finish.
+  if (driveable) {
     const planned = new Set(
       plan
         .filter((st) => REGIONS[st.region].density === 'dense')
@@ -605,7 +653,11 @@ async function main() {
     )
     const reached = new Set([...samples.map((x) => x.tier), ...crossings.map((c) => c.tierAfter)])
     for (const t of planned) {
-      if (!reached.has(t)) findings.failures.push(`plan coverage: the "${t}" tier was never active in any step of the run`)
+      if (!reached.has(t)) {
+        findings.failures.push(
+          `plan coverage: the "${t}" tier was never active in any step of the run${truncated ? ` (${truncated})` : ''}`,
+        )
+      }
     }
     log(`tiers reached: ${[...planned].map((t) => `${t} ${reached.has(t) ? 'yes' : 'NO'}`).join(' · ')}`)
   }

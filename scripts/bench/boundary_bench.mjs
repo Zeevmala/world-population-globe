@@ -52,6 +52,8 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const arg = process.argv.find((a) => a.startsWith('--repeats='))
 const REPEATS = arg ? Math.max(1, Number(arg.split('=')[1]) | 0) : 7
 
+// The cull keeps what a canvas shows; this bench's numbers were recorded at 1280×800.
+const CANVAS = { width: 1280, height: 800 }
 const VIEWS = [
   { name: 'India z2.5', longitude: 77, latitude: 20, zoom: 2.5 },
   { name: 'Tokyo z3.5', longitude: 139.7, latitude: 35.68, zoom: 3.5 },
@@ -71,9 +73,9 @@ const words = h3Words(h3.packed)
 
 /** The next re-cull window of an eastward pan: nudge east until the cull key changes. */
 function nextWindow(v) {
-  const k0 = cullKeyFor(data, v)
+  const k0 = cullKeyFor(data, v, CANVAS)
   let w = { ...v }
-  while (cullKeyFor(data, w) === k0) w = { ...w, longitude: w.longitude + 0.05 }
+  while (cullKeyFor(data, w, CANVAS) === k0) w = { ...w, longitude: w.longitude + 0.05 }
   return w
 }
 
@@ -117,8 +119,8 @@ console.log(`mid tier: ${n.toLocaleString('en-US')} cells · median of ${REPEATS
 
 for (const v of VIEWS) {
   const w = nextWindow(v)
-  const a = cullForView(data, v).indices
-  const b = cullForView(data, w).indices
+  const a = cullForView(data, v, CANVAS).indices
+  const b = cullForView(data, w, CANVAS).indices
   const inA = new Set(a)
   let shared = 0
   for (const i of b) if (inA.has(i)) shared++
@@ -156,7 +158,7 @@ for (const v of VIEWS) {
   )
 
   console.log(
-    `\n${v.name} → next re-cull at lng ${w.longitude.toFixed(2)} (key ${cullKeyFor(data, v)} → ${cullKeyFor(data, w)})`,
+    `\n${v.name} → next re-cull at lng ${w.longitude.toFixed(2)} (key ${cullKeyFor(data, v, CANVAS)} → ${cullKeyFor(data, w, CANVAS)})`,
   )
   console.log(`  cells ${b.length.toLocaleString('en-US')} · shared with previous cull ${shared.toLocaleString('en-US')} (${((100 * shared) / b.length).toFixed(1)} %)`)
   console.log(`  boundary  BEFORE stock deck.gl ×2 passes ${fmt(before)}   + _calculateH3DataProps ${fmt(beforeProps)}`)
@@ -175,7 +177,7 @@ for (const v of VIEWS) {
   let cells = 0
   const t0 = performance.now()
   while (view.longitude < v.longitude + 360) {
-    const idx = cullForView(data, view).indices
+    const idx = cullForView(data, view, CANVAS).indices
     boundaryPasses(idx, (s) => cachedPolygon(cache, s))
     cells += idx.length
     maxSize = Math.max(maxSize, cache.size)

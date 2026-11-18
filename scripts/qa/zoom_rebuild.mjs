@@ -18,15 +18,16 @@ import { fileURLToPath } from 'node:url'
 import { launchBrowser } from './browser.mjs'
 import { ensureDevServer } from './server.mjs'
 import { readAppState, setCamera } from './page-probe.mjs'
+import { ZOOM_STEP } from '../../src/lib/footprint.ts'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 // A culled tier (more cells than the 120 k cap, so `cullForView` keys on the camera):
 // the coarsest such tier in the manifest — r5 since the re-band — at the cull-key zoom
-// bucket (0.25 wide) nearest the middle of its band.
+// bucket (`ZOOM_STEP` wide, from `src/lib/footprint.ts`) nearest the middle of its band.
 const CAP = 120_000
 const manifest = JSON.parse(readFileSync(join(ROOT, 'public', 'data', 'manifest.json'), 'utf8'))
 const TIER = manifest.lods.find((l) => !l.tiled && l.cellCount > CAP)
-const Z0 = Math.round((TIER.minZoom + TIER.maxZoom) / 2 / 0.25) * 0.25
+const Z0 = Math.round((TIER.minZoom + TIER.maxZoom) / 2 / ZOOM_STEP) * ZOOM_STEP
 const t0 = Date.now()
 const log = (m) => console.log(`[zoom_rebuild +${((Date.now() - t0) / 1000).toFixed(1)}s] ${m}`)
 const server = await ensureDevServer({ root: ROOT, port: 5199, log })
@@ -68,8 +69,9 @@ try {
     return { tess: window.__tess, sameData: top.props.data === window.__d0, elevationScale: Math.round(top.props.elevationScale), cells: top.props.data.length }
   })
 
-  // 1) zoom-only frames inside one cull key (zoom bucket Z0 ± 0.125, position unchanged)
-  const zooms = [-0.08, -0.05, -0.02, 0.02, 0.05, 0.08, 0.11, 0.07, 0, -0.06].map((d) => Z0 + d)
+  // 1) zoom-only frames inside one cull key (zoom bucket Z0 ± ZOOM_STEP/2, position unchanged):
+  //    offsets up to 0.44 of a step either way.
+  const zooms = [-0.32, -0.2, -0.08, 0.08, 0.2, 0.32, 0.44, 0.28, 0, -0.24].map((d) => Z0 + d * ZOOM_STEP)
   for (const z of zooms) {
     await page.evaluate(setCamera, { longitude: 77, latitude: 20, zoom: z })
     await frame(); await frame()
