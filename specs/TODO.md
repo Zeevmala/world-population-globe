@@ -28,8 +28,9 @@ CHECKER : factory-reviewer (Opus, fresh context, read-only) gets the item and th
           not the maker's report — and returns PASS/FAIL per Accept criterion
 COMMIT  : gate green AND checker PASS → one conventional commit = the change + the item
           moved to Done as `[x]` with its evidence; push the branch
-RETRY   : gate red or checker FAIL → back to the same maker once; second failure →
-          stash the work, BLOCKED line, stop
+RETRY   : one send-back per oracle — a red gate goes back to the same maker once, and a
+          checker FAIL goes back once (then a fresh checker); a second red gate, or a
+          second FAIL, → stash the work, BLOCKED line, stop
 BUDGET  : ≤ 12 ticks/run · 1 item/tick · ≤ 3 sub-agents/tick · strictly serial (items
           share files, and the render gate's timings are CPU-sensitive)
 STOP    : queue empty | blocked sentinel present | budget spent

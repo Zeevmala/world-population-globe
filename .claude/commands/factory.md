@@ -35,9 +35,11 @@ implements, a script gates, a checker reviews, and only then do you commit.
      evidence and anything not verified. One conventional commit holding the change and
      that edit. Push the branch.
    - Gate red, or `VERDICT: FAIL` → send the failing output or the findings back to the
-     **same** maker (it keeps its context) once. Re-gate, and re-review with a **fresh**
-     reviewer.
-   - Second failure → `git stash push -u -m "factory: blocked — <item title>"` (the work
+     **same** maker (it keeps its context). Each oracle gets one send-back per tick: the
+     gate once, the review once. They catch different things, and a harness hiccup that
+     turns the gate red must not use up the only chance to act on the first independent
+     review. After a send-back, re-gate, and re-review with a **fresh** reviewer.
+   - A second red gate, or a second FAIL → `git stash push -u -m "factory: blocked — <item title>"` (the work
      is kept, not deleted), add a line starting `BLOCKED: <item title> — <reason, what
      was tried, the stash name>` under **Blocked**, commit only that, push, and stop.
 6. A maker that reports `RESULT: BLOCKED` goes straight to the blocked path.
@@ -47,7 +49,7 @@ implements, a script gates, a checker reviews, and only then do you commit.
 - **Strictly serial.** One tick at a time, one gate at a time. Queue items share files,
   and the render gate's timings are CPU-sensitive — parallel ticks produce merge
   conflicts and false stalls.
-- **At most three sub-agents per tick**: maker, checker, and one fresh checker after a retry.
+- **At most three sub-agents per tick**: maker, checker, and one fresh checker after a review send-back.
 - **Never push to `main`, never open or merge a PR unless asked.**
 - You may fix a typo in the *(Done …)* note. You may not fix the maker's code — send it back.
 
