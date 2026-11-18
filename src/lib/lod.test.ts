@@ -2,10 +2,10 @@ import { describe, expect, it } from 'vitest'
 import { _GlobeViewport as GlobeViewport } from '@deck.gl/core'
 import { cullForView, cullKeyFor, cullWindowCells, pickLod, selectActive } from './lod'
 import type { TileCoverage } from './lod'
-import { MAX_LATITUDE, ZOOM_STEP, cullBucket, cullWindow } from './footprint'
+import { MAX_LATITUDE, ZOOM_STEP, bucketView, cullBucket, cullWindow } from './footprint'
 import type { Canvas } from './footprint'
 import { MANIFEST, makeLod, rng } from '../test/fixtures'
-import { CAP, DEG, LOCAL, RealProjection, checkCoverage, localTier, view } from '../test/cullHarness'
+import { CAP, DEG, LOCAL, RealProjection, checkCoverage, localTier, sameKeyViews, view } from '../test/cullHarness'
 import type { GlobeViewState, LodData, TileSet } from '../types'
 
 const tiny = (lod: string, h3Res: number): LodData => makeLod(lod, h3Res, 1, () => [0, 0, 1])
@@ -22,36 +22,41 @@ const tileSet = (data: LodData | null, extra: Partial<TileSet> = {}): TileSet =>
   ...extra,
 })
 const COVERS: TileCoverage = () => true
-const SEL_CANVAS = { width: 1280, height: 800 }
+/**
+ * Where selection equals the manifest's nominal bands (`tierBands.test.ts` Accept b): the
+ * equator, on a canvas small enough that no tier's cull window can overfill the cap there.
+ */
+const NOMINAL = { width: 360, height: 640 }
+const eq = (zoom: number) => view(0, 0, zoom)
 
 describe('pickLod', () => {
   const loaded = { overview: tiny('overview', 4), r5: tiny('r5', 5), mid: tiny('mid', 6) }
 
   it('returns null without a manifest', () => {
-    expect(pickLod(3, null, loaded)).toBeNull()
+    expect(pickLod(eq(3), NOMINAL, null, loaded)).toBeNull()
   })
 
   it('picks the finest loaded tier whose band is reached', () => {
-    expect(pickLod(1.3, MANIFEST, loaded)).toBe('overview')
-    expect(pickLod(3.78, MANIFEST, loaded)).toBe('r5')
-    expect(pickLod(5.18, MANIFEST, loaded)).toBe('mid')
-    expect(pickLod(9, MANIFEST, loaded)).toBe('mid') // r8 is tiled — never in `loaded`
+    expect(pickLod(eq(1.3), NOMINAL, MANIFEST, loaded)).toBe('overview')
+    expect(pickLod(eq(3.78), NOMINAL, MANIFEST, loaded)).toBe('r5')
+    expect(pickLod(eq(5.18), NOMINAL, MANIFEST, loaded)).toBe('mid')
+    expect(pickLod(eq(9), NOMINAL, MANIFEST, loaded)).toBe('mid') // r8 is tiled — never in `loaded`
   })
 
   it('falls back to a coarser tier while the finer one is still loading', () => {
-    expect(pickLod(4.5, MANIFEST, { overview: loaded.overview })).toBe('overview')
-    expect(pickLod(6, MANIFEST, { overview: loaded.overview, r5: loaded.r5 })).toBe('r5')
+    expect(pickLod(eq(4.5), NOMINAL, MANIFEST, { overview: loaded.overview })).toBe('overview')
+    expect(pickLod(eq(6), NOMINAL, MANIFEST, { overview: loaded.overview, r5: loaded.r5 })).toBe('r5')
     // A cold deep link loads the overview and the finest whole tier only (`tierPlan.ts`).
-    expect(pickLod(4.5, MANIFEST, { overview: loaded.overview, mid: loaded.mid })).toBe('overview')
+    expect(pickLod(eq(4.5), NOMINAL, MANIFEST, { overview: loaded.overview, mid: loaded.mid })).toBe('overview')
   })
 
   it('holds the active tier inside the hysteresis band, then yields', () => {
     // Zooming out of `r5`: it survives 0.15 below its 3.78 entry zoom…
-    expect(pickLod(3.7, MANIFEST, loaded, 'r5')).toBe('r5')
+    expect(pickLod(eq(3.7), NOMINAL, MANIFEST, loaded, 'r5')).toBe('r5')
     // …and gives way once the camera has clearly left.
-    expect(pickLod(3.62, MANIFEST, loaded, 'r5')).toBe('overview')
+    expect(pickLod(eq(3.62), NOMINAL, MANIFEST, loaded, 'r5')).toBe('overview')
     // Zooming in from `overview` gets no early entry.
-    expect(pickLod(3.77, MANIFEST, loaded, 'overview')).toBe('overview')
+    expect(pickLod(eq(3.77), NOMINAL, MANIFEST, loaded, 'overview')).toBe('overview')
   })
 })
 
@@ -68,7 +73,7 @@ describe('the shipped band table', () => {
     r8: tileSet(tiny('r8', 8)),
   }
   const tierAt = (zoom: number, active?: string) =>
-    selectActive(view(139.7, 35.68, zoom), SEL_CANVAS, MANIFEST, loaded, tiles, active, COVERS).entry?.lod
+    selectActive(eq(zoom), NOMINAL, MANIFEST, loaded, tiles, active, COVERS).entry?.lod
 
   it('is overview → r5 → mid → r7 → r8, each band starting where the last ends', () => {
     expect(MANIFEST.lods.map((l) => [l.lod, l.h3Res])).toEqual([
@@ -116,22 +121,22 @@ describe('selectActive', () => {
   const r8 = tiny('r8', 8)
 
   it('prefers streamed r8 once its band is reached and tiles are merged', () => {
-    expect(selectActive(view(0, 0, 8.5), SEL_CANVAS, MANIFEST, loaded, { r8: tileSet(r8) }, null, COVERS).entry?.lod).toBe('r8')
+    expect(selectActive(view(0, 0, 8.5), NOMINAL, MANIFEST, loaded, { r8: tileSet(r8) }, null, COVERS).entry?.lod).toBe('r8')
   })
 
   it('falls back to the finest whole tier while r8 has no cells', () => {
-    expect(selectActive(view(0, 0, 8.5), SEL_CANVAS, MANIFEST, loaded, {}, null, COVERS).entry?.lod).toBe('mid')
-    expect(selectActive(view(0, 0, 8.5), SEL_CANVAS, MANIFEST, loaded, { r8: tileSet(null) }, null, COVERS).entry?.lod).toBe('mid')
+    expect(selectActive(view(0, 0, 8.5), NOMINAL, MANIFEST, loaded, {}, null, COVERS).entry?.lod).toBe('mid')
+    expect(selectActive(view(0, 0, 8.5), NOMINAL, MANIFEST, loaded, { r8: tileSet(null) }, null, COVERS).entry?.lod).toBe('mid')
     const empty = makeLod('r8', 8, 0, () => [0, 0, 0])
-    expect(selectActive(view(0, 0, 8.5), SEL_CANVAS, MANIFEST, loaded, { r8: tileSet(empty) }, null, COVERS).entry?.lod).toBe('mid')
+    expect(selectActive(view(0, 0, 8.5), NOMINAL, MANIFEST, loaded, { r8: tileSet(empty) }, null, COVERS).entry?.lod).toBe('mid')
   })
 
   it('never shows r8 below its band, even with tiles merged', () => {
-    expect(selectActive(view(0, 0, 6), SEL_CANVAS, MANIFEST, loaded, { r8: tileSet(r8) }, null, COVERS).entry?.lod).toBe('mid')
+    expect(selectActive(view(0, 0, 6), NOMINAL, MANIFEST, loaded, { r8: tileSet(r8) }, null, COVERS).entry?.lod).toBe('mid')
   })
 
   it('returns the data that belongs to the chosen entry', () => {
-    const { entry, data } = selectActive(view(0, 0, 4.5), SEL_CANVAS, MANIFEST, loaded, {}, null, COVERS)
+    const { entry, data } = selectActive(view(0, 0, 4.5), NOMINAL, MANIFEST, loaded, {}, null, COVERS)
     expect(entry?.lod).toBe('r5')
     expect(data).toBe(loaded.r5)
   })
@@ -215,15 +220,16 @@ describe('cullForView', () => {
     expect(Array.from(indices!).sort()).toEqual([0, 1])
   })
 
-  it('past the cap, keeps every on-screen cell of the triggering view before the margin', () => {
+  it("past the cap, keeps the key's reference screen, then the margin nearest it — the same cells from every view on the key", () => {
     // A window over the cap whose screen holds fewer than the cap: the margin's cells are
     // the more populous, so a plain top-k over the window would drop on-screen cells.
     const canvas = C1280
     const v = view(77, 20, 5.2)
+    const ref = bucketView(cullBucket(v, canvas)) // 1280×800 is on the 16 px grid: same canvas
     const tier = localTier(77, 20, 25, 42)
     const real = new RealProjection(tier, LOCAL)
-    const on = new Set(real.onScreen(v, canvas))
-    // Densify: 40 k extra cells in the margin ring just past the screen, all very populous.
+    const on = new Set(real.onScreen(ref, canvas))
+    // Densify: 140 k extra cells around the screen, all very populous.
     const rand = rng(43)
     const extra = makeLod('mid', 6, tier.lng.length + 140_000, (i) => {
       if (i < tier.lng.length) return [tier.lng[i], tier.lat[i], on.has(i) ? 1 : tier.population[i]]
@@ -231,41 +237,53 @@ describe('cullForView', () => {
       return [77 + (rand() - 0.5) * 30, 20 + (rand() - 0.5) * 20, 1e6]
     })
     const realX = new RealProjection(extra, extra.lng.length)
-    const onX = realX.onScreen(v, canvas)
+    const onX = realX.onScreen(ref, canvas)
     expect(onX.length).toBeLessThan(CAP)
     const { indices } = cullForView(extra, v, canvas)
     expect(indices!.length).toBe(CAP) // the window holds more than the cap
     const kept = new Set(indices!)
     expect(kept.size).toBe(CAP)
-    expect(onX.filter((i) => !kept.has(i))).toEqual([]) // every on-screen cell, low population or not
-    // …and the rest of the cap went to the margin's most populous cells: nothing in the
-    // window left out outranks a margin cell kept. (Cells within half a pixel of the border
-    // may be promoted by the on-screen test's rounding slack; they are not margin.)
-    const onSet = new Set(realX.onScreen(v, canvas, 0.5))
-    let minMarginKept = Infinity
-    for (const i of indices!) if (!onSet.has(i)) minMarginKept = Math.min(minMarginKept, extra.population[i])
-    let maxDropped = -Infinity
-    for (const i of cullWindowCells(extra, v, canvas)) {
-      if (!kept.has(i)) maxDropped = Math.max(maxDropped, extra.population[i])
+    expect(onX.filter((i) => !kept.has(i))).toEqual([]) // every reference on-screen cell, low population or not
+    // …and the rest of the cap went to the margin nearest that screen, not to population:
+    // no window cell left out is nearer (deck.gl's projection, normalized to the half-canvas,
+    // the larger axis) than a margin cell kept — up to the half-pixel rounding slack.
+    const vp = new GlobeViewport({ ...canvas, ...ref })
+    const near = (i: number) => {
+      const [sx, sy] = vp.project([extra.lng[i], extra.lat[i]])
+      return Math.max(Math.abs(sx - canvas.width / 2) / (canvas.width / 2), Math.abs(sy - canvas.height / 2) / (canvas.height / 2))
     }
-    expect(minMarginKept).toBeGreaterThanOrEqual(maxDropped)
-    expect(minMarginKept).toBe(1e6)
+    const front = new Set(realX.onScreen(ref, { width: 1e7, height: 1e7 })) // in front of the horizon
+    let farthestKept = 0
+    for (const i of indices!) if (front.has(i)) farthestKept = Math.max(farthestKept, near(i))
+    let nearestDropped = Infinity
+    for (const i of cullWindowCells(extra, v, canvas)) {
+      if (!kept.has(i) && front.has(i)) nearestDropped = Math.min(nearestDropped, near(i))
+    }
+    expect(farthestKept).toBeGreaterThan(1) // the margin got some of the cap
+    expect(farthestKept).toBeLessThanOrEqual(nearestDropped + 1 / canvas.height)
+    // The same cells whichever view on the key triggered the cull (the old rule kept the
+    // TRIGGERING view's screen first; a neighbour on the key then missed 3–7 % of its own).
+    const ids = Array.from(indices!).sort((a, b) => a - b)
+    for (const p of sameKeyViews(v, canvas, rng(45), 4)) {
+      expect(Array.from(cullForView(extra, p, canvas).indices!).sort((a, b) => a - b)).toEqual(ids)
+    }
   })
 
-  it('past the cap with more than the cap on screen, selects nothing off screen', () => {
+  it("past the cap with more than the cap on the key's reference screen, selects nothing off it", () => {
     const canvas = C1280
-    const v = view(0, 0, 3.8)
+    const v = view(0.4, 0.3, 3.8)
+    const ref = bucketView(cullBucket(v, canvas))
     const rand = rng(44)
     // 360 k cells over ±60°: ~138 k on screen; the off-screen ones are the populous ones.
     const data = makeLod('mid', 6, 360_000, () => [(rand() - 0.5) * 120, (rand() - 0.5) * 120, 1])
     const real = new RealProjection(data, data.lng.length)
-    const on = new Set(real.onScreen(v, canvas))
+    const on = new Set(real.onScreen(ref, canvas))
     for (let i = 0; i < data.lng.length; i++) if (!on.has(i)) data.population[i] = 1e6
     expect(on.size).toBeGreaterThan(CAP)
     const { indices } = cullForView(data, v, canvas)
     expect(indices!.length).toBe(CAP)
     // Half a pixel of rounding slack at the border may promote a cell; nothing farther out.
-    const near = new Set(real.onScreen(v, canvas, 0.5))
+    const near = new Set(real.onScreen(ref, canvas, 0.5))
     expect(indices!.filter((i) => !near.has(i)).length).toBe(0)
   })
 

@@ -164,9 +164,12 @@ describe('the re-cull bucket', () => {
   const key = (lng: number, lat: number, zoom: number, c = canvas) =>
     bucketKey(cullBucket({ longitude: lng, latitude: lat, zoom }, c))
 
-  it('changes with the canvas size', () => {
+  it('changes with the canvas size, in steps of 16 px', () => {
     expect(key(10, 20, 5)).not.toBe(key(10, 20, 5, { width: 1281, height: 800 }))
-    expect(key(10, 20, 5)).not.toBe(key(10, 20, 5, { width: 1280, height: 799 }))
+    expect(key(10, 20, 5)).not.toBe(key(10, 20, 5, { width: 1280, height: 801 }))
+    expect(key(10, 20, 5)).not.toBe(key(10, 20, 5, { width: 1264, height: 800 }))
+    // Inside one 16 px step the key holds (rounded up: 1265–1280 × 785–800 all key as 1280×800).
+    expect(key(10, 20, 5)).toBe(key(10, 20, 5, { width: 1265, height: 785 }))
   })
 
   it('steps a sixth of the shorter canvas side, at any latitude', () => {

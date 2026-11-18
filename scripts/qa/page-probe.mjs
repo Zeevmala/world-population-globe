@@ -68,10 +68,16 @@ export function readAppState() {
     if (typeof state.activeLod === 'string' && state.activeLod) {
       tier = state.activeLod
     } else {
+      // Before the layer has published `activeLod`: the finest LOADED tier at or below the
+      // one the app's own selection wants for this view and canvas (`src/lib/tierBands.ts`
+      // `wantedIndex`, exposed in dev builds as `__globeTiers`) — never the manifest's
+      // nominal bands, which the app no longer selects by.
       let chosen = null
-      for (const entry of manifest.lods) {
-        if (state.viewState.zoom >= entry.minZoom && state.data[entry.lod]) chosen = entry.lod
-      }
+      const select = window.__globeTiers
+      const wanted = select ? select.wantedIndex(state.viewState, state.canvas, manifest.lods) : manifest.lods.length - 1
+      manifest.lods.forEach((entry, i) => {
+        if (i <= wanted && state.data[entry.lod]) chosen = entry.lod
+      })
       if (!chosen) {
         const first = manifest.lods.find((l) => state.data[l.lod])
         chosen = first ? first.lod : null

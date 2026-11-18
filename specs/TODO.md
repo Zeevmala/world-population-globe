@@ -39,56 +39,41 @@ REPORT  : evidence in the Done note + commit body; sprint summary → PROJECT_ST
 
 ## Queue
 
-Option A (decided 2026-11-18, see **Backlog**) comes first, as five items in dependency
-order — each leaves the app coherent on its own. The two items after them each wait on
-something outside the session.
+Option A (decided 2026-11-18, see **Backlog**) is done — its five items are under
+**Done**. First here is the follow-up it left: the cap rule is safe but coarse on a
+desktop canvas. The two items after it each wait on something outside the session.
 
-- [ ] Tier selection that follows latitude and canvas size: the bands are zoom thresholds
-      at the equator on a nominal canvas, but GlobeView scales by 1/cos(lat) — at 60° N a
-      cell is twice as wide on screen as the band assumes — and a larger canvas holds more
-      cells: at the 3-px threshold a fully populated 1920×1080 view is ~266 k cells, over
-      twice the cap, so top-k truncation returns on exactly the big desktop screens this
-      portfolio piece is judged on. Select by on-screen cell size at the view center
-      instead: the finest tier whose hexagon is at least max(3 px, √(canvas px ÷ (0.866 ×
-      a cell budget))) across, from the footprint model, with hysteresis kept. The budget
-      is not the cap: the cull keeps a margin around the screen (window ÷ on-screen was
-      1.2–1.9× on the committed tiers, up to 2.5× on a synthetic one), and while the window
-      exceeds 120 k the cells kept depend on the view that triggered the cull — another
-      view on the same key then misses 3–7 % of its on-screen cells. So budget the WINDOW
-      under the cap (or shrink the margin and say what that costs in re-culls), and make
-      what is kept past the cap a function of the key alone. The bench's current offenders
-      are listed in the cull item's Done note. Since selection now depends on the canvas,
-      a window drag must not re-select and re-cull on every resize frame (today each one
-      re-culls and re-tessellates): quantize or debounce the canvas size. A very wide
-      canvas (2560×1080) also puts more tiles on screen than the 64-tile cache holds at a
-      tiled tier's entry zoom (62–77); canvas-aware bands should bring that back under.
-      The manifest's zoom bands stay as the nominal (equator, 3 px) values and a test pins
-      them to the model. Also load a whole tier only when it is wanted or about to be —
-      today every whole tier below the zoom is fetched, so a deep-link to zoom 9 would
-      download r5 and the 31 MB r6 for nothing — and start that load shortly before the
-      band so the crossing does not wait on it. (Tick 8 already narrowed the loader to
-      the finest whole tier whose band is reached; what is left: a search fly-to from the
-      hero still fetches and decodes every tier it merely passes through — r5's 6 MB
-      competes with the 31 MB r6 and the r8 tile burst mid-flight — and a cold deep-link
-      into the r6 band shows 22 km cells until the 31 MB file decodes, where the 6 MB r5
-      would arrive far sooner as an intermediate.)
-      Accept: unit tests prove (a) at one zoom the selected tier steps finer as latitude
-      rises, at the latitude the model predicts, and coarser as the canvas grows; (b) at
-      the equator on a canvas small enough that the budget does not bind (the render
-      harness's 900×560) selection equals the manifest's nominal bands, and on 1280×800
-      and 1920×1080 each threshold moves later by exactly what the budget formula gives —
-      the shift stated in zoom and in px, and pinned by the test (a 1280×800 canvas over
-      India already holds 105 k cells on screen and a 160 k window at r5's nominal entry,
-      so it cannot keep the nominal bands and fit the cap);
-      (c) no flapping: a view parked on a threshold in zoom, latitude or canvas size does
-      not alternate tiers; (d) a cold deep-link to zoom 9 requests no whole tier other than
-      the overview, and approaching a whole tier's band from below requests it before the
-      threshold; (e) the bench from the cull item, re-run: no listed view exceeds the cap
-      on 1280×800 or 1920×1080; (f) a fly-to from the hero to a city requests only the
-      tiers it will stop in or fall back on, not every tier it crosses; (g) on the
-      committed tiers, for every bench view and sampled views sharing its key, 0 on-screen
-      cells are missing — the window fits the cap; (h) dragging the canvas from 1280×800
-      to 1300×820 in 1 px steps re-culls at most a handful of times, not once per step.
+- [ ] Win back the detail the cap rule gives away: tick 12 starts each tier where its cull
+      window cannot hold more than the cap even if every cell in it were populated and as
+      small as the smallest H3 hexagon anywhere (0.6 × the mean area). That is safe — the
+      fullest real window is 93 % of the cap and the committed data peaks at 65 % — but
+      coarse on a desktop: on 1920×1080 at the equator r5 starts at zoom 5.44 with cells
+      9.5 px across, and r4 cells reach ~23 px before it does (r8 only from 9.45); on
+      1280×800 tiers start about one zoom later than the 3-px rule. Measured costs: the
+      uniform 0.6 area floor 0.28–0.37 zoom; judging the fit 0.15 below the threshold
+      0.15; the drift margin, zoom bucket and canvas-key rounding ~0.35; ~0.57 on 1920×1080
+      is unavoidable under a 120 k cap. Recover what can be recovered without giving up
+      the guarantee: (1) a floor that knows where the window is — H3's area distortion is
+      a smooth function of the angular distance to the nearest icosahedron face center, so
+      the smallest cell a given window can contain is computable without h3-js — or at
+      least a per-resolution floor measured over window-sized regions (the checker's
+      estimate: +0.32 zoom at r5, 0.15 at mid, 0.08 at r7, 0.05 at r8); (2) a tighter drift
+      margin where re-culls are cheap — say what halving the pan step costs in re-culls
+      per pan and wins in zoom. Also from the review: a window drag crosses a new 16-px
+      canvas key every 16 px and each computes cold thresholds synchronously (~12–25 ms a
+      step, ~40 hitches from 1280 to 1920 px wide) while the idle warmer restarts for every
+      transient size — debounce the canvas that SELECTION uses, and bound the threshold
+      cache.
+      Accept: (a) `node scripts/bench/cull_coverage.mjs --scan` still reports 0 windows
+      over the cap and 0 on-screen cells missing, and a Node check kept under
+      `scripts/bench/` that counts REAL H3 cells in worst-case windows (every tier, the
+      five canvases, next to each icosahedron vertex) stays ≤ the cap; (b) the threshold
+      table for 900×560, 1280×800, 1920×1080, 375×812 and 2560×1080 at lat 0 / 35.68 / 60
+      is reported before and after, each tier starting earlier by at least 0.2 zoom at r5
+      and 0.1 at mid on 1280×800 and 1920×1080 — or a stated reason the geometry does not
+      allow it; (c) the existing jitter tests still find no flapping, including at any new
+      cache-cell edge; (d) a 1 px-step drag from 1280 to 1920 px wide computes thresholds
+      for at most a handful of canvas sizes; (e) the entry chunk's size before and after.
       Gate: verify, qa:render.
 - [ ] Night-lights basemap toggle: swap the dark-ocean sphere texture for NASA Black Marble
       (public domain) behind a `Controls.tsx` toggle; columns must stay legible
@@ -121,6 +106,14 @@ something outside the session.
 
 ## Backlog (needs breakdown before queueing)
 
+- **OWNER DECISION — the 120 k cell cap against large canvases.** With tiers banded by
+  on-screen size and the cull window guaranteed to fit the cap (ticks 8–12), the cap is
+  now what limits detail on a big screen: 1920×1080 cannot show cells finer than ~4.5 px
+  across even with a perfect fit and no margin, and with the margins the guarantee needs,
+  cells are 8–10 px at a tier's entry. The queue item above recovers what the bound gives
+  away; beyond that, finer cells on desktop mean a higher cap. The cap was set when tiers
+  drew sub-pixel prisms, and nothing since has been measured on a real GPU — a decision
+  needs frame times at 120 k, 200 k and 300 k extruded cells on real hardware.
 - **DECIDED 2026-11-18 — Option A: band the LOD tiers by on-screen cell size.** Measured
   against deck.gl 9.3's real `GlobeViewport` (1280×800, CSS px), each tier switched on ~3
   zoom levels before its cells were visible: an r6 hexagon was 0.38–0.47 px across at the
@@ -746,3 +739,105 @@ something outside the session.
       Known: `verify_live.mjs` no longer asserts that any particular tier exists, so a
       deployed manifest that had lost r8 would pass (noted on the CI item); the 512-person
       Σ tolerance, which pre-dates this, also applies to r7 although its sum is exact.)*
+- [x] Tier selection that follows latitude and canvas size: the bands are zoom thresholds
+      at the equator on a nominal canvas, but GlobeView scales by 1/cos(lat) — at 60° N a
+      cell is twice as wide on screen as the band assumes — and a larger canvas holds more
+      cells: at the 3-px threshold a fully populated 1920×1080 view is ~266 k cells, over
+      twice the cap, so top-k truncation returns on exactly the big desktop screens this
+      portfolio piece is judged on. Select by on-screen cell size at the view center
+      instead: the finest tier whose hexagon is at least max(3 px, √(canvas px ÷ (0.866 ×
+      a cell budget))) across, from the footprint model, with hysteresis kept. The budget
+      is not the cap: the cull keeps a margin around the screen (window ÷ on-screen was
+      1.2–1.9× on the committed tiers, up to 2.5× on a synthetic one), and while the window
+      exceeds 120 k the cells kept depend on the view that triggered the cull — another
+      view on the same key then misses 3–7 % of its on-screen cells. So budget the WINDOW
+      under the cap (or shrink the margin and say what that costs in re-culls), and make
+      what is kept past the cap a function of the key alone. The bench's current offenders
+      are listed in the cull item's Done note. Since selection now depends on the canvas,
+      a window drag must not re-select and re-cull on every resize frame (today each one
+      re-culls and re-tessellates): quantize or debounce the canvas size. A very wide
+      canvas (2560×1080) also puts more tiles on screen than the 64-tile cache holds at a
+      tiled tier's entry zoom (62–77); canvas-aware bands should bring that back under.
+      The manifest's zoom bands stay as the nominal (equator, 3 px) values and a test pins
+      them to the model. Also load a whole tier only when it is wanted or about to be —
+      today every whole tier below the zoom is fetched, so a deep-link to zoom 9 would
+      download r5 and the 31 MB r6 for nothing — and start that load shortly before the
+      band so the crossing does not wait on it. (Tick 8 already narrowed the loader to
+      the finest whole tier whose band is reached; what is left: a search fly-to from the
+      hero still fetches and decodes every tier it merely passes through — r5's 6 MB
+      competes with the 31 MB r6 and the r8 tile burst mid-flight — and a cold deep-link
+      into the r6 band shows 22 km cells until the 31 MB file decodes, where the 6 MB r5
+      would arrive far sooner as an intermediate.)
+      Accept: unit tests prove (a) at one zoom the selected tier steps finer as latitude
+      rises, at the latitude the model predicts, and coarser as the canvas grows; (b) at
+      the equator on a canvas small enough that the budget does not bind (the render
+      harness's 900×560) selection equals the manifest's nominal bands, and on 1280×800
+      and 1920×1080 each threshold moves later by exactly what the budget formula gives —
+      the shift stated in zoom and in px, and pinned by the test (a 1280×800 canvas over
+      India already holds 105 k cells on screen and a 160 k window at r5's nominal entry,
+      so it cannot keep the nominal bands and fit the cap);
+      (c) no flapping: a view parked on a threshold in zoom, latitude or canvas size does
+      not alternate tiers; (d) a cold deep-link to zoom 9 requests no whole tier other than
+      the overview, and approaching a whole tier's band from below requests it before the
+      threshold; (e) the bench from the cull item, re-run: no listed view exceeds the cap
+      on 1280×800 or 1920×1080; (f) a fly-to from the hero to a city requests only the
+      tiers it will stop in or fall back on, not every tier it crosses; (g) on the
+      committed tiers, for every bench view and sampled views sharing its key, 0 on-screen
+      cells are missing — the window fits the cap; (h) dragging the canvas from 1280×800
+      to 1300×820 in 1 px steps re-culls at most a handful of times, not once per step.
+      Gate: verify, qa:render.
+      *(Done 2026-11-19, factory tick 12, Option A step 5 — with the specification amended
+      during review, so read this note over the criteria above where they differ.
+      What shipped: `src/lib/tierBands.ts` selects, per view, the finest tier whose
+      threshold is passed, where a tier's threshold is the LATER of the 3-px rule moved by
+      log2(cos lat) and "the cull window fits the cap" (`src/lib/tierFit.ts`): the ground
+      area of the window the cull would use — the canvas grown by the re-cull drift, cut
+      at the horizon — × 1.03 ÷ (0.6 × the mean H3 cell area), judged 0.15 zoom below the
+      threshold so a tier held by hysteresis fits too, at the worst bucket alignment.
+      Thresholds are cached per 16-px canvas key and 1° latitude band and warmed in idle
+      time. The loader plans for where the camera is going (`flyTarget` while flying):
+      each whole tier 0.5 zoom before its band, a 6 MB r5 interim under the 31 MB r6, no
+      whole tier under a tiled one, nothing for bands a flight only crosses. Past the cap
+      the kept cells are a function of the cull key alone (a safety net the committed data
+      no longer reaches). The cull key rounds the canvas up to 16 px, with a window proven
+      to cover every canvas on the key. The zoom ladder, DataStatus, tile streaming, the
+      search arrival zoom, the render harness and the bench all read the same selection.
+      How it got there: the first cut used a flat 65 k on-screen budget and met every
+      criterion as written; the checker's scan (5 canvases × 3,408 view centres × 4 tiers
+      × threshold / held) then found 2,518 of 102,240 cases with the window over the cap —
+      r5 across Kazakhstan, Central Asia, the Russian plain, Iran and Punjab, worst
+      178,800 — and, because past-the-cap selection had been made key-only as this item
+      asked, the triggering view itself missing 1–4 % of its edge cells there. A lower
+      budget did not close it (the limb is inside r5's window; a flat estimate cannot see
+      that), so criteria (b), (e) and (g) were replaced: the window must fit by
+      construction, the nominal bands hold only where nothing moves them, and the scan
+      replaces the hand-picked bench views.
+      Evidence: `node scripts/bench/cull_coverage.mjs --scan` — 136,320 views, 0 windows
+      over the cap (largest 78,283), 36,091 views checked against deck.gl with 0 on-screen
+      cells missing, 0 over the 64-tile cache. The second checker, independently: the
+      bound peaks at 0.999 of the cap over every latitude to the clamp and every bucket
+      alignment; REAL H3 cells counted in 1,160 worst-case windows peak at 93 % of the cap
+      (111,683, next to a pentagon); its own data scan found 0 over the cap and 0 missing
+      in 133,519 checked views; 253,440 jitter runs on thresholds, band edges and
+      canvas-key edges with 0 flaps; loader sequences re-driven on 5 canvases. 314 unit
+      tests; render gate green with all five tiers reached and 0 console errors. Seen by
+      the orchestrator on the first cut at 1920×1080 over Delhi: r8 with nothing truncated
+      where zoom 8.05 used to draw 120,000 of 371,827 cells as speckle.
+      Thresholds now (zoom; cell px at entry) — 900×560 at the equator: r5 4.42 (4.7), mid
+      5.69 (4.3), r7 7.06 (4.2), r8 8.45 (4.1); 1280×800: 4.91 (6.6), 6.19 (6.0), 7.56
+      (5.9), 8.95 (5.8); 1920×1080: 5.44 (9.5), 6.71 (8.6), 8.06 (8.3), 9.45 (8.3);
+      375×812: 3.98 (3.4), 5.30 (3.3), 6.68 (3.2), 8.07 (3.2). Nominal bands hold only at
+      the equator on canvases up to about 360×640.
+      The cost, stated plainly: the guarantee is conservative. On 1920×1080 every tier
+      starts about 1.5 zoom later than the 3-px rule — r4 cells reach ~23 px before r5
+      takes over — and about 1 zoom later on 1280×800. Of that, the uniform 0.6 cell-area
+      floor costs 0.28–0.37 zoom, the hysteresis allowance 0.15, the drift margin and key
+      rounding ~0.35, and ~0.57 on 1920×1080 is unavoidable under a 120 k cap. The fullest
+      window in the committed data is 65 % of the cap. Recovering detail is the next
+      queue item; the cap itself is an owner decision (Backlog).
+      Also known: a cold latitude band costs ~12 ms on the frame that first needs it; a
+      window drag crosses a new canvas key every 16 px and each computes cold thresholds
+      (~40 hitches of 12–25 ms from 1280 to 1920 px wide); the threshold cache is
+      unbounded (~100 B per entry); the entry chunk grew 220.42 → 226.49 kB (footprint and
+      fit model; no deck.gl or h3-js). Not verified: any of this on a real GPU, and the
+      idle warming in a browser.)*

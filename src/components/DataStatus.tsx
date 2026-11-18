@@ -1,4 +1,5 @@
-import { wholeTierFor } from '../lib/tierPlan'
+import { wantedTier } from '../lib/tierBands'
+import { flightTier, pendingWholeTier, planView } from '../lib/tierPlan'
 import { useGlobeStore } from '../store/useGlobeStore'
 
 /** Nominal cell edge as a human label: 22 → "22 km", 0.4 → "400 m". */
@@ -7,35 +8,46 @@ function cellLabel(km: number): string {
 }
 
 /**
- * Background-load feedback for the tiers that arrive *after* first paint: crossing into
- * the `r5` / `mid` bands pulls a 6 / 31 MB Parquet and crossing into a tiled band streams tiles — both of
- * which used to happen in total silence. Everything here is derived from real store
- * state (manifest + what's actually decoded), so it can't claim progress that isn't real.
+ * Background-load feedback for the tiers that arrive *after* first paint: a whole tier the
+ * view wants pulls a 6 / 31 MB Parquet and a tiled tier streams tiles — both of which used
+ * to happen in total silence. Everything here is derived from real store state (manifest,
+ * what is decoded, the tier on screen) through the loader's and selection's own functions
+ * (`tierPlan.ts`, `tierBands.ts`), so it can't claim progress that isn't real.
  */
 export function DataStatus() {
   const manifest = useGlobeStore((s) => s.manifest)
-  const data = useGlobeStore((s) => s.data)
   const tiles = useGlobeStore((s) => s.tiles)
   const activeLod = useGlobeStore((s) => s.activeLod)
   const status = useGlobeStore((s) => s.status)
-  // Primitive selector: no re-render on rotation, only when the zoom actually moves.
-  const zoom = useGlobeStore((s) => s.viewState.zoom)
+  // Primitive selectors (tier names): no re-render on rotation, only when a decision changes.
+  // The whole tier the loader is fetching for the view it plans for (the camera, or a
+  // flight's destination) and hasn't decoded yet — a tier the loader skipped (one a flight
+  // passes through, or a deep link lands past) is never reported as loading.
+  const pendingLod = useGlobeStore(
+    (s) => pendingWholeTier(planView(s.viewState, s.flyTarget), s.canvas, s.manifest, s.data)?.lod ?? '',
+  )
+  // The tier the camera wants right now, and the one a flight under way will end on.
+  const wantedLod = useGlobeStore((s) => wantedTier(s.viewState, s.canvas, s.manifest)?.lod ?? '')
+  const flight = useGlobeStore((s) => flightTier(s.flyTarget, s.canvas, s.manifest))
 
   if (!manifest) return null
 
-  const entered = manifest.lods.filter((l) => zoom >= l.minZoom)
-  const active = entered[entered.length - 1] ?? manifest.lods[0]
-
-  // The whole tier the loader is fetching for this zoom but hasn't decoded yet (the
-  // 31 MB `mid` case) — the same choice `useGlobeData` makes, so a tier the loader
-  // skipped (a cold deep link past it) is never reported as loading.
-  const want = wholeTierFor(zoom, manifest)
-  const pendingWhole = want && !data[want.lod] ? want : undefined
-  // The tiled tier whose band is reached, not on screen yet, and still fetching tiles for
-  // this view — not one that settled with nothing to draw (open ocean) or whose index failed.
-  const tileSet = active.tiled ? tiles[active.lod] : undefined
+  const byLod = (lod: string | null) => manifest.lods.find((l) => l.lod === lod)
+  const pendingWhole = byLod(pendingLod)
+  // The tiled tier the camera wants, not on screen yet, and still fetching tiles for this
+  // view — not one that settled with nothing to draw (open ocean) or whose index failed,
+  // and not one a flight is passing through (its stream is held off).
+  const wanted = byLod(wantedLod)
+  const tileSet = wanted?.tiled ? tiles[wanted.lod] : undefined
   const pendingTiles =
-    active.tiled && activeLod !== active.lod && (!tileSet || tileSet.status === 'loading') ? active : undefined
+    wanted?.tiled &&
+    activeLod !== wanted.lod &&
+    (flight === null || flight === wanted.lod) &&
+    (!tileSet || tileSet.status === 'loading')
+      ? wanted
+      : undefined
+  // The tier on screen (selection's truth, as the ladder shows it) for the live region.
+  const shown = byLod(activeLod) ?? manifest.lods[0]
 
   const pending = pendingWhole ?? pendingTiles
   const message = pendingWhole
@@ -50,7 +62,7 @@ export function DataStatus() {
     <>
       {/* Tier changes are visible in the legend; this makes them audible too. */}
       <p className="sr-only" role="status" aria-live="polite">
-        {`Detail level: ${cellLabel(active.approxKm)} cells`}
+        {`Detail level: ${cellLabel(shown.approxKm)} cells`}
       </p>
       {pending && status !== 'loading' ? (
         <div className="hud-panel hud-fade mx-auto mt-1.5 w-fit px-2.5 py-1.5" role="status" aria-live="polite">

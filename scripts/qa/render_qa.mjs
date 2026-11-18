@@ -39,8 +39,9 @@
  *   --frames / --anim-ms  per-sample animation length (default 24 frames, 1200 ms cap)
  *   --settle-timeout <n>  per-sample settle cap (default 60000)
  *
- * The bands, crossings and sample zooms are derived from public/data/manifest.json, and
- * the deepest zoom from the app itself. With the four-tier manifest a full run samples 11
+ * The bands, crossings and sample zooms are derived from public/data/manifest.json — moved
+ * for the canvas and each region's latitude by the app's own tier selection
+ * (`src/lib/tierBands.ts`, imported, not re-derived) — and the deepest zoom from the app itself. With the four-tier manifest a full run samples 11
  * camera states plus the three cold tier crossings (the run prints its plan's counts). On a GPU that is quick; under SwiftShader on a contended box expect 10-20
  * minutes, so --quick (the gate's plan) exists and --budget-ms bounds the worst case.
  *
@@ -76,6 +77,8 @@ import {
   worstStall,
 } from './report.mjs'
 import { MAX_ZOOM as APP_MAX_ZOOM } from '../../src/lib/camera.ts'
+// The app's own tier selection (pure, Node-importable): which tier a view wants on a canvas.
+import { tierEntry, wantedIndex } from '../../src/lib/tierBands.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = resolve(HERE, '..', '..')
@@ -91,7 +94,7 @@ const REGIONS = {
 /**
  * Tier bands, read from the committed manifest (`public/data/manifest.json`, written by
  * `pipeline/tiers.py`) — never typed here, so the plan follows a re-band. Set in `main`.
- * @type {{ lod: string, minZoom: number, maxZoom: number }[]}
+ * @type {{ lod: string, h3Res: number, approxKm: number, minZoom: number, maxZoom: number, tiled: boolean }[]}
  */
 let BANDS = []
 
@@ -140,14 +143,26 @@ let cueDismissed = false
 
 function loadBands(root) {
   const manifest = JSON.parse(readFileSync(join(root, 'public', 'data', 'manifest.json'), 'utf8'))
-  return manifest.lods.map(({ lod, minZoom, maxZoom, tiled }) => ({ lod, minZoom, maxZoom, tiled: !!tiled }))
+  return manifest.lods.map(({ lod, h3Res, approxKm, minZoom, maxZoom, tiled }) => ({ lod, h3Res, approxKm, minZoom, maxZoom, tiled: !!tiled }))
 }
 
-/** The tier the app should show at this zoom: the finest whose band is reached. */
-function expectedTier(zoom) {
-  let tier = BANDS[0].lod
-  for (const b of BANDS) if (zoom >= b.minZoom) tier = b.lod
-  return tier
+/**
+ * The canvas the harness drives (`--width` × `--height`, 900×560 by default; DPR 1). Tier
+ * selection depends on it and on the view's latitude (`src/lib/tierBands.ts`), so every
+ * expectation below asks the app's own function for this canvas and the region's
+ * latitude — on 900×560 the cap rule starts every tier 0.46–0.64 zoom later than the manifest's
+ * equator bands, and Tokyo's 35.68° N moves them about 0.27 zoom earlier again. Set in `main`.
+ */
+let CANVAS = { width: 900, height: 560 }
+
+/** The tier the app wants for a region at this zoom, on the harness canvas (no hysteresis). */
+function expectedTier(zoom, region) {
+  return BANDS[wantedIndex({ latitude: REGIONS[region].latitude, zoom }, CANVAS, BANDS)].lod
+}
+
+/** Where tier `lod` starts for a region on the harness canvas (the app's `tierEntry`). */
+function entryAt(lod, region) {
+  return tierEntry(BANDS, BANDS.findIndex((b) => b.lod === lod), REGIONS[region].latitude, CANVAS)
 }
 
 /** A zoom-scaled angular step — the old cull's `min(60, 180/2^zoom)` half-span, kept as it
@@ -157,23 +172,28 @@ const halfSpanDeg = (zoom) => Math.min(60, 180 / Math.pow(2, zoom))
 
 const round2 = (z) => Math.round(z * 100) / 100
 
-/** A cold crossing of each tier threshold: from just below it to just past it. */
+/** A cold crossing of each tier threshold, where it lies for this region: from just below it to just past it. */
 function crossingsFor(region) {
-  return BANDS.slice(1).map((b) => ({
-    type: 'crossing',
-    id: `cross-${b.lod}@${b.minZoom}`,
-    region,
-    from: round2(b.minZoom - 0.18),
-    to: round2(b.minZoom + 0.17),
-    frames: 4,
-    lod: b.lod,
-  }))
+  return BANDS.slice(1).map((b) => {
+    const at = entryAt(b.lod, region)
+    return {
+      type: 'crossing',
+      id: `cross-${b.lod}@${round2(at)}`,
+      region,
+      from: round2(at - 0.18),
+      to: round2(at + 0.17),
+      frames: 4,
+      lod: b.lod,
+    }
+  })
 }
 
-/** A zoom inside a tier's band where that tier is unambiguously the wanted one. */
-function bandMiddle(lod) {
-  const b = BANDS.find((x) => x.lod === lod)
-  return round2((Math.max(b.minZoom, -1) + Math.min(b.maxZoom, MAX_ZOOM)) / 2)
+/** A zoom inside a tier's band for this region where that tier is unambiguously the wanted one. */
+function bandMiddle(lod, region) {
+  const i = BANDS.findIndex((x) => x.lod === lod)
+  const from = Math.max(entryAt(lod, region), -1)
+  const to = Math.min(i + 1 < BANDS.length ? entryAt(BANDS[i + 1].lod, region) : Infinity, MAX_ZOOM)
+  return round2((from + to) / 2)
 }
 
 /**
@@ -199,19 +219,19 @@ function buildPlan(quick) {
     return [
       sample('tokyo', HERO_ZOOM),
       ...tokyo.filter((c) => c.lod !== finest),
-      sample('tokyo', bandMiddle(BANDS[BANDS.length - 2].lod)),
+      sample('tokyo', bandMiddle(BANDS[BANDS.length - 2].lod, 'tokyo')),
       at(finest),
-      sample('tokyo', bandMiddle(finest)),
+      sample('tokyo', bandMiddle(finest, 'tokyo')),
     ]
   }
   const steps = [sample('tokyo', 0.5), sample('tokyo', HERO_ZOOM)]
   for (const b of BANDS.slice(1)) {
     steps.push(at(b.lod))
-    steps.push(sample('tokyo', bandMiddle(b.lod)))
+    steps.push(sample('tokyo', bandMiddle(b.lod, 'tokyo')))
   }
   steps.push(sample('tokyo', MAX_ZOOM))
-  for (const lod of BANDS.slice(1).map((b) => b.lod)) steps.push(sample('cairo', bandMiddle(lod)))
-  steps.push(sample('ocean', HERO_ZOOM), sample('ocean', bandMiddle(finest)))
+  for (const lod of BANDS.slice(1).map((b) => b.lod)) steps.push(sample('cairo', bandMiddle(lod, 'cairo')))
+  steps.push(sample('ocean', HERO_ZOOM), sample('ocean', bandMiddle(finest, 'ocean')))
   return steps
 }
 
@@ -461,7 +481,11 @@ async function capture(page, opts, id, findings) {
 async function main() {
   const opts = parseArgs(process.argv.slice(2))
   BANDS = loadBands(opts.url ? REPO_ROOT : opts.root)
+  CANVAS = { width: opts.width, height: opts.height }
   log(`bands (manifest): ${BANDS.map((b) => `${b.lod} ${b.minZoom}–${b.maxZoom}`).join(' · ')}`)
+  for (const region of Object.keys(REGIONS)) {
+    log(`bands (app, ${CANVAS.width}×${CANVAS.height} over ${REGIONS[region].label}): ${BANDS.slice(1).map((b) => `${b.lod} ${round2(entryAt(b.lod, region))}`).join(' · ')}`)
+  }
   mkdirSync(opts.out, { recursive: true })
   mkdirSync(dirname(opts.json), { recursive: true })
 
@@ -601,7 +625,7 @@ async function main() {
     if (step.type === 'sample') {
       const id = `${step.region}@z${step.zoom.toFixed(2)}`
       ctx.phase = id
-      log(`· ${id} (${region.label}, ${region.density}, expect ${expectedTier(step.zoom)})`)
+      log(`· ${id} (${region.label}, ${region.density}, expect ${expectedTier(step.zoom, step.region)})`)
       const errorsBefore = consoleErrors.length + pageErrors.length
 
       await page.evaluate(markPhase)
@@ -614,7 +638,7 @@ async function main() {
 
       const timeoutMs = region.density === 'sparse' ? Math.min(opts.settleTimeoutMs, 20_000) : opts.settleTimeoutMs
       const settle = driveable
-        ? await settleAt(page, ctx, { tier: expectedTier(step.zoom), timeoutMs })
+        ? await settleAt(page, ctx, { tier: expectedTier(step.zoom, step.region), timeoutMs })
         : { ms: 0, tierReached: null, quiet: null, worstStallMs: 0, longtasks: [], state: {} }
 
       const state = driveable ? settle.state : await page.evaluate(readAppState).catch(() => ({}))
@@ -638,8 +662,8 @@ async function main() {
           `P0 invariant: ${id} rendered ${renderedCells} cells/frame, over the ${MAX_RENDERED_CELLS} cap (tier ${tier})`,
         )
       }
-      if (driveable && tier !== expectedTier(step.zoom)) {
-        const note = `${id}: active tier is "${tier}", expected "${expectedTier(step.zoom)}"${region.density === 'sparse' ? ' (sparse region — r8 pyramid has no tile here, so the fallback is correct)' : ''}`
+      if (driveable && tier !== expectedTier(step.zoom, step.region)) {
+        const note = `${id}: active tier is "${tier}", expected "${expectedTier(step.zoom, step.region)}"${region.density === 'sparse' ? ' (sparse region — r8 pyramid has no tile here, so the fallback is correct)' : ''}`
         if (region.density === 'sparse') findings.warnings.push(note)
         else findings.failures.push(note)
       }
@@ -659,7 +683,7 @@ async function main() {
         longitude: region.longitude,
         latitude: region.latitude,
         zoom: step.zoom,
-        expectedTier: expectedTier(step.zoom),
+        expectedTier: expectedTier(step.zoom, step.region),
         tier,
         tierCells: state.tierCells ?? null,
         renderedCells,
@@ -694,7 +718,7 @@ async function main() {
       log(`· ${step.id} (${region.label}: zoom ${step.from} → ${step.to}, cold)`)
       await page.evaluate(markPhase)
       await page.evaluate(setCamera, { longitude: region.longitude, latitude: region.latitude, zoom: step.from })
-      const before = await settleAt(page, ctx, { tier: expectedTier(step.from), timeoutMs: opts.settleTimeoutMs })
+      const before = await settleAt(page, ctx, { tier: expectedTier(step.from, step.region), timeoutMs: opts.settleTimeoutMs })
 
       await page.evaluate(markPhase)
       // A ramp frame can cost seconds here, and the wall-clock cap is only checked
@@ -712,7 +736,7 @@ async function main() {
       })
       const rampReachedZoom = anim.endView ? Math.round(anim.endView.zoom * 1000) / 1000 : null
       await page.evaluate(setCamera, { longitude: region.longitude, latitude: region.latitude, zoom: step.to })
-      const after = await settleAt(page, ctx, { tier: expectedTier(step.to), timeoutMs: opts.settleTimeoutMs })
+      const after = await settleAt(page, ctx, { tier: expectedTier(step.to, step.region), timeoutMs: opts.settleTimeoutMs })
       const frame = animationStats(anim)
       const stall = Math.max(worstStall(anim.deltas, anim.longtasks), after.worstStallMs)
       const shot = await capture(page, opts, step.id, findings)
@@ -727,9 +751,9 @@ async function main() {
       // camera has crossed its threshold is a defect, not a slow machine. It is
       // reported rather than failed because it is a standing bug, not a regression —
       // see the note in the report's `findings`.
-      if (!after.tierReached && after.state.tier !== expectedTier(step.to)) {
+      if (!after.tierReached && after.state.tier !== expectedTier(step.to, step.region)) {
         findings.warnings.push(
-          `${step.id}: the "${expectedTier(step.to)}" tier never became active after the crossing (still "${after.state.tier}" after ${Math.round(after.ms)} ms). Check the request log for this phase: no tile fetch means the streaming effect short-circuited.`,
+          `${step.id}: the "${expectedTier(step.to, step.region)}" tier never became active after the crossing (still "${after.state.tier}" after ${Math.round(after.ms)} ms). Check the request log for this phase: no tile fetch means the streaming effect short-circuited.`,
         )
       }
 
@@ -766,7 +790,7 @@ async function main() {
     const planned = new Set(
       plan
         .filter((st) => REGIONS[st.region].density === 'dense')
-        .map((st) => expectedTier(st.type === 'sample' ? st.zoom : st.to)),
+        .map((st) => expectedTier(st.type === 'sample' ? st.zoom : st.to, st.region)),
     )
     const reached = new Set([...samples.map((x) => x.tier), ...crossings.map((c) => c.tierAfter)])
     for (const t of planned) {

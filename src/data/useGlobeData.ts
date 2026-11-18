@@ -1,13 +1,16 @@
 import { useEffect, useRef } from 'react'
 import { loadLod, loadManifest } from './load'
-import { wholeTierFor } from '../lib/tierPlan'
+import { warmOneBand } from '../lib/tierBands'
+import { planView, wholeTiersFor } from '../lib/tierPlan'
 import { useGlobeStore } from '../store/useGlobeStore'
 
 /**
- * Drives data loading: fetches the manifest + the coarsest tier on mount, then
- * lazily loads a finer whole tier the first time the camera rests in or passes
- * through its zoom band ({@link wholeTierFor}). A ref-set
- * dedupes in-flight loads (incl. React 19 StrictMode double-invoke).
+ * Drives data loading: fetches the manifest + the coarsest tier on mount, then requests
+ * each finer whole tier when the view the loader plans for — the camera, or the
+ * destination of a flight under way — reaches its band or comes within the prefetch lead
+ * of it, plus an interim tier under a whole tier that has not arrived
+ * ({@link wholeTiersFor}). A ref-set dedupes in-flight loads (incl. React 19 StrictMode
+ * double-invoke).
  */
 export function useGlobeData(): void {
   const setManifest = useGlobeStore((s) => s.setManifest)
@@ -15,9 +18,39 @@ export function useGlobeData(): void {
   const setStatus = useGlobeStore((s) => s.setStatus)
   const setError = useGlobeStore((s) => s.setError)
   const manifest = useGlobeStore((s) => s.manifest)
-  const data = useGlobeStore((s) => s.data)
-  const zoom = useGlobeStore((s) => s.viewState.zoom)
+  // The plan as a primitive (tier names), so this hook's host re-renders when the plan
+  // changes, not on every camera frame.
+  const plan = useGlobeStore((s) =>
+    wholeTiersFor(planView(s.viewState, s.flyTarget), s.canvas, s.manifest, s.data)
+      .map((l) => l.lod)
+      .join(','),
+  )
   const requested = useRef<Set<string>>(new Set())
+  const canvas = useGlobeStore((s) => s.canvas)
+
+  // Fill the tier-threshold cache (`tierBands.ts`: one window search per canvas key and 1°
+  // latitude band, ~12 ms each) in idle time, nearest the camera's latitude first, so a pan
+  // across latitudes rarely pays for a band on the spot. Restarts when the canvas changes.
+  useEffect(() => {
+    if (!manifest) return
+    const w = globalThis as {
+      requestIdleCallback?: (cb: () => void) => number
+      cancelIdleCallback?: (id: number) => void
+    }
+    let id = 0
+    let stopped = false
+    const step = () => {
+      if (stopped) return
+      const more = warmOneBand(manifest.lods, canvas, useGlobeStore.getState().viewState.latitude)
+      if (more) id = w.requestIdleCallback ? w.requestIdleCallback(step) : (setTimeout(step, 50) as unknown as number)
+    }
+    id = w.requestIdleCallback ? w.requestIdleCallback(step) : (setTimeout(step, 50) as unknown as number)
+    return () => {
+      stopped = true
+      if (w.cancelIdleCallback) w.cancelIdleCallback(id)
+      else clearTimeout(id)
+    }
+  }, [manifest, canvas])
 
   useEffect(() => {
     let alive = true
@@ -43,13 +76,15 @@ export function useGlobeData(): void {
   }, [setManifest, addData, setStatus, setError])
 
   useEffect(() => {
-    // Tiled tiers (r8) stream via useTileStreaming; of the whole tiers, only the finest
-    // one whose band is reached is fetched (see `wholeTierFor`).
-    const entry = wholeTierFor(zoom, manifest)
-    if (!entry || data[entry.lod] || requested.current.has(entry.lod)) return
-    requested.current.add(entry.lod)
-    loadLod(entry)
-      .then(addData)
-      .catch((e) => console.error(`LOD "${entry.lod}" failed to load`, e))
-  }, [zoom, manifest, data, addData])
+    // Tiled tiers stream via useTileStreaming; whole tiers are requested coarsest first.
+    if (!manifest || !plan) return
+    for (const lod of plan.split(',')) {
+      const entry = manifest.lods.find((l) => l.lod === lod)
+      if (!entry || requested.current.has(lod)) continue
+      requested.current.add(lod)
+      loadLod(entry)
+        .then(addData)
+        .catch((e) => console.error(`LOD "${lod}" failed to load`, e))
+    }
+  }, [plan, manifest, addData])
 }

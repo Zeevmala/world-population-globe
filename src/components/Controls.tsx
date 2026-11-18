@@ -1,4 +1,5 @@
 import { MAX_ZOOM, MIN_ZOOM } from '../lib/camera'
+import { effectiveBands } from '../lib/tierBands'
 import { bandsFor, type LadderBand } from '../lib/zoomLadder'
 import { useGlobeStore } from '../store/useGlobeStore'
 import { HudButton } from './HudButton'
@@ -123,7 +124,11 @@ export function Controls({ onShowHelp, onShare, shareState }: ControlsProps) {
   const minZoom = useGlobeStore((s) => s.viewState.minZoom ?? MIN_ZOOM)
   const maxZoom = useGlobeStore((s) => s.viewState.maxZoom ?? MAX_ZOOM)
 
-  const bands = manifest ? bandsFor(manifest.lods, minZoom, maxZoom) : []
+  // Where the tiers switch for this view (`tierBands.ts`): this canvas, this latitude —
+  // rounded to 0.5° so a drag re-renders the rail only when a band can visibly move.
+  const canvas = useGlobeStore((s) => s.canvas)
+  const lat = useGlobeStore((s) => Math.round(s.viewState.latitude * 2) / 2)
+  const bands = manifest ? bandsFor(effectiveBands(manifest.lods, lat, canvas), minZoom, maxZoom) : []
 
   // Mirrors the store's load-time framing (portrait needs a tighter hero zoom).
   const home = () => flyTo(25, 20, window.innerHeight > window.innerWidth * 1.4 ? 1.9 : 1.3)

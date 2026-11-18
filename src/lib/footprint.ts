@@ -228,14 +228,47 @@ export interface CullBucket {
   iy: number
   /** Mercator step, radians. */
   q: number
+  /** The key's canvas ({@link keyCanvas}: the real one rounded up to CANVAS_STEP), CSS px. */
   width: number
   height: number
 }
 
+/**
+ * Canvas quantum of the re-cull key, CSS px. A window drag reports a new canvas size on
+ * every frame; the key holds the canvas rounded UP to a multiple of this ({@link keyCanvas}),
+ * so a drag re-culls (and re-selects tiles) once per 16 px of growth or shrinkage on either
+ * axis — twice for 1280×800 → 1300×820 in 1 px steps — instead of once per frame. The
+ * window is built for a canvas that covers every real canvas sharing the key
+ * ({@link windowCanvas}), so a resized canvas is never left with uncovered edges between
+ * re-culls. Cost: the window grows by up to one quantum per axis plus ~2 % in width
+ * (3–5 % more cells at 1280×800); a larger quantum would re-cull less and spend more of the cap.
+ */
+export const CANVAS_STEP = 16
+
+/** The canvas a re-cull key is built for: each side rounded up to {@link CANVAS_STEP} (≥ 1 step). */
+export function keyCanvas(canvas: Canvas): Canvas {
+  return {
+    width: Math.ceil(px(canvas.width) / CANVAS_STEP) * CANVAS_STEP,
+    height: Math.ceil(px(canvas.height) / CANVAS_STEP) * CANVAS_STEP,
+  }
+}
+
+/**
+ * The canvas a key's window is computed for: the key canvas, widened so it covers every
+ * real canvas (W, H) that maps to the key (W ≤ key width, H > key height − CANVAS_STEP).
+ * GlobeView's camera depends on the canvas height: with the eye `k − 1 ∝ H` globe radii
+ * out and focal length 1.5·H, a point at `x` px from the center on a canvas of height H
+ * is at `x' ≤ x · H'/H` on one of height H' ≥ H (and never behind the horizon there). So a
+ * canvas of height H' covers one of height H and width W when its width is at least
+ * W · H'/H; the vertical bound holds by construction (H/2 · H'/H = H'/2).
+ */
+export function windowCanvas(b: Pick<CullBucket, 'width' | 'height'>): Canvas {
+  return { width: (b.width * b.height) / Math.max(1, b.height - CANVAS_STEP), height: b.height }
+}
+
 /** The key's buckets for a view on a canvas — `cullKeyFor` prints these. */
 export function cullBucket(view: GlobeViewState, canvas: Canvas): CullBucket {
-  const width = px(canvas.width)
-  const height = px(canvas.height)
+  const { width, height } = keyCanvas(canvas)
   const zq = Math.round(view.zoom / ZOOM_STEP) * ZOOM_STEP
   const q = (Math.min(width, height) * QUANTUM_SHARE * 2 * Math.PI) / (512 * Math.pow(2, zq))
   const lng = ((((view.longitude + 180) % 360) + 360) % 360) - 180 // [-180, 180)
@@ -247,6 +280,18 @@ export function cullBucket(view: GlobeViewState, canvas: Canvas): CullBucket {
     width,
     height,
   }
+}
+
+/**
+ * The bucket's reference view: its center (Mercator cell center, clamped like the window's
+ * reference) at its zoom `zq`. A view that shares the key — used where a choice must be a
+ * function of the key alone (`lod.ts`, the cull past the cap).
+ */
+export function bucketView(b: CullBucket): GlobeViewState {
+  const yLo = Math.max(-MERC_Y_MAX, (b.iy - 0.5) * b.q)
+  const yHi = Math.min(MERC_Y_MAX, (b.iy + 0.5) * b.q)
+  const lng = (b.ix * b.q) / DEG
+  return { longitude: ((((lng + 180) % 360) + 360) % 360) - 180, latitude: latOfMercY((yLo + yHi) / 2), zoom: b.zq }
 }
 
 /** The bucket's key string (without the tier name). */
@@ -308,7 +353,7 @@ const SLACK = 0.01
  * keeps cells behind every view's horizon out, and the chart unambiguous.
  */
 export function cullWindow(b: CullBucket): CullWindow {
-  const canvas = { width: b.width, height: b.height }
+  const canvas = windowCanvas(b)
   const zLo = b.zq - ZOOM_STEP / 2
   const x0 = b.ix * b.q
   const yLo = Math.max(-MERC_Y_MAX, (b.iy - 0.5) * b.q)

@@ -1,4 +1,4 @@
-import { cellAreaKm2 } from './density'
+import { cellAreaKm2 } from './density.ts'
 
 /**
  * How big things are on screen on deck.gl's `_GlobeView` — the model the LOD bands are

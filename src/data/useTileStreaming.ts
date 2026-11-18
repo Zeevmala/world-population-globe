@@ -4,6 +4,7 @@ import { decodeTable } from './decodeClient'
 import { TILE_CACHE_MAX, TILE_RETRY_COOLDOWN_MS, TileStream } from './tileStream'
 import type { TileCols } from './tileStream'
 import { streamWanted } from '../lib/lod'
+import { flightTier } from '../lib/tierPlan'
 import { selectParents, tileKey } from '../lib/tiles'
 import type { Canvas } from '../lib/footprint'
 import { useGlobeStore } from '../store/useGlobeStore'
@@ -159,7 +160,8 @@ async function serve(
  * Streams every tiled tier in the manifest — one {@link TileStream} per tier, each with
  * its own cache, retry state and timers — and publishes each tier's merged tiles to the
  * store's `tiles` under its name. A tier streams while {@link streamWanted} says so (its
- * band is reached, or it is the tier on screen); when it stops, its timers and in-flight
+ * band for this view's latitude and canvas is reached and, during a flight, it is where the
+ * flight ends — or it is the tier on screen); when it stops, its timers and in-flight
  * work are abandoned, and its cache and last published set are kept for a quick return.
  * Re-selects only when the tile key ({@link tileKey}, the cull's bucket) changes, so
  * drag ticks inside a bucket cost a key comparison.
@@ -175,6 +177,8 @@ export function useTileStreaming(): void {
   const canvas = useGlobeStore((s) => s.canvas)
   const activeLod = useGlobeStore((s) => s.activeLod)
   const setTiles = useGlobeStore((s) => s.setTiles)
+  // The tier a flight under way will end on (a primitive: re-renders only when it changes).
+  const flight = useGlobeStore((s) => flightTier(s.flyTarget, s.canvas, s.manifest))
 
   const tiled = useMemo(() => manifest?.lods.filter((l) => l.tiled && l.indexFile) ?? [], [manifest])
   const streams = useRef(new Map<string, TierStream>())
@@ -205,7 +209,8 @@ export function useTileStreaming(): void {
         streams.current.set(entry.lod, ts)
       }
       const { ctl } = ts
-      if (!streamWanted(entry, view.zoom, activeLod)) {
+      const lods = manifest?.lods ?? []
+      if (!streamWanted(lods, lods.indexOf(entry), view, canvas, activeLod, flight)) {
         if (ctl.key) abandon(ctl)
         ctl.key = ''
         continue
@@ -216,5 +221,5 @@ export function useTileStreaming(): void {
       const gen = abandon(ctl)
       void serve(ts, gen, view, canvas, setTiles)
     }
-  }, [tiled, view, canvas, activeLod, setTiles])
+  }, [tiled, manifest, view, canvas, activeLod, flight, setTiles])
 }

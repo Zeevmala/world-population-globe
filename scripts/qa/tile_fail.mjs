@@ -3,9 +3,10 @@
  * tile_fail — headless confirmation that ONE failed tile does not blank a tiled tier.
  *
  * Takes the finest tiled tier in the manifest (r8 today) — or the one named by `--tier`
- * (`--tier r7`) — and opens the dev server deep-linked to Tokyo inside its band: one zoom
- * level past its start, or the band's middle if that comes first (`#139.7/35.68/8.99`
- * with r8 from 7.99, `…/7.29` for r7's 6.59–7.99; `--zoom` overrides), aborts every request for the parent tile under the camera (Playwright `route.abort`,
+ * (`--tier r7`) — and opens the dev server deep-linked to Tokyo inside its band as the app
+ * selects it on this 1280×800 canvas (`src/lib/tierBands.ts`): one zoom level past its
+ * start, or the band's middle if that comes first (`#139.7/35.68/9.33` with r8 from 8.65,
+ * `…/7.96` for r7's 7.27–8.65; `--zoom` overrides), aborts every request for the parent tile under the camera (Playwright `route.abort`,
  * on the browser context so the decode worker's fetches are intercepted too), and
  * waits for the app to publish the tier anyway. PASS = `activeLod` is the tier, with its
  * merged cells (`tiles[tier].data`) > 0 and aligned, the aborted tile really was
@@ -38,6 +39,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { latLngToCell } from 'h3-js'
+import { effectiveBands } from '../../src/lib/tierBands.ts'
 import { launchBrowser } from './browser.mjs'
 import { readAppState } from './page-probe.mjs'
 import { ensureDevServer } from './server.mjs'
@@ -55,13 +57,19 @@ const QUIET_MS = 45_000
 // The finest tiled tier in the committed manifest (r8 today) or `--tier`, viewed one zoom
 // level past the start of its band (or at its middle, if nearer); the tile aborted is its
 // parent (at the tier's tileParentRes) under the camera.
-const TILED = JSON.parse(readFileSync(join(ROOT, 'public', 'data', 'manifest.json'), 'utf8')).lods.filter((l) => l.tiled)
+const LODS = JSON.parse(readFileSync(join(ROOT, 'public', 'data', 'manifest.json'), 'utf8')).lods
+const TILED = LODS.filter((l) => l.tiled)
 const TIER = opt('tier', null) ? TILED.find((l) => l.lod === opt('tier')) : TILED.at(-1)
 if (!TIER) throw new Error(`--tier ${opt('tier')}: not a tiled tier in the manifest (${TILED.map((l) => l.lod)})`)
 const round2 = (z) => Math.round(z * 100) / 100
-const DEFAULT_ZOOM = round2(Math.min(TIER.minZoom + 1, (TIER.minZoom + TIER.maxZoom) / 2))
-const VIEW = { lng: 139.7, lat: 35.68, zoom: Number(opt('zoom', String(DEFAULT_ZOOM))) }
-if (!(VIEW.zoom >= TIER.minZoom && VIEW.zoom < TIER.maxZoom)) throw new Error(`zoom ${VIEW.zoom} is outside ${TIER.lod}'s band`)
+// The browser below is 1280×800 and the view is over Tokyo: the tier's band there, as the
+// app selects it (`src/lib/tierBands.ts`: the manifest band moved for canvas and latitude).
+const CANVAS = { width: 1280, height: 800 }
+const TOKYO = { lng: 139.7, lat: 35.68 }
+const BAND = effectiveBands(LODS, TOKYO.lat, CANVAS).find((b) => b.lod === TIER.lod)
+const DEFAULT_ZOOM = round2(Math.min(BAND.from + 1, (BAND.from + Math.min(BAND.to, 10)) / 2))
+const VIEW = { ...TOKYO, zoom: Number(opt('zoom', String(DEFAULT_ZOOM))) }
+if (!(VIEW.zoom >= BAND.from && VIEW.zoom < BAND.to)) throw new Error(`zoom ${VIEW.zoom} is outside ${TIER.lod}'s band over Tokyo on 1280×800 (${round2(BAND.from)}–${round2(BAND.to)})`)
 const PARENT = opt('parent', latLngToCell(VIEW.lat, VIEW.lng, TIER.tileParentRes))
 // Tile URLs live beside the tier's index: `data/tiles/<tier>/parent=<h3>/…`.
 const TILE_DIR = TIER.indexFile.slice(0, TIER.indexFile.lastIndexOf('/'))
@@ -147,7 +155,7 @@ async function workerFail(server, context, page, pageErrors) {
 
 async function main() {
   const server = await ensureDevServer({ root: ROOT, port: PORT, log })
-  const { browser, context, page } = await launchBrowser({ width: 1280, height: 800 })
+  const { browser, context, page } = await launchBrowser(CANVAS)
   const pageErrors = []
   const tileWarnings = []
   const aborts = []

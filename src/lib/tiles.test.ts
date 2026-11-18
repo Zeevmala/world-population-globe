@@ -120,12 +120,14 @@ describe('selectParents — the parents overlapping the footprint (Accept a, b)'
       expect(w.visible, k).toBeLessThanOrEqual(TILE_CACHE_MAX)
       expect(w.kept, k).toBeLessThanOrEqual(TILE_CACHE_MAX)
       // The whole ring fits uncut everywhere but the widest case — 1920×1080 at zoom 8
-      // over the smallest r3 cells: here 49 visible + 31 ring = 80 (over 50 longitudes
-      // at the equator the worst seen is 50 + 32 = 82), so the ring is cut to its nearest
-      // 15 parents there (pinned below so a change in either direction is seen).
+      // over the smallest r3 cells: here 51 visible + 31 ring = 82 (49 + 31 before the key
+      // rounded the canvas up to 16 px — 1080 → 1088, and the window ~1.5 % wider so it
+      // covers every canvas on the key), so the ring is cut to its nearest 13 parents there
+      // (pinned below so a change in either direction is seen). Since tier selection follows
+      // the canvas, r8 is not selected there below zoom 9.0 (`tierBands.test.ts`).
       if (k !== '1920×1080@8') expect(w.withRing, k).toBeLessThanOrEqual(TILE_CACHE_MAX)
     }
-    expect(worst.get('1920×1080@8')).toEqual({ visible: 49, withRing: 80, kept: 64 })
+    expect(worst.get('1920×1080@8')).toEqual({ visible: 51, withRing: 82, kept: 64 })
   }, 60_000)
 
   it('(b) r2: the same code selects r2 parents for an entry declaring tileParentRes 2 — zoom 6.44 / 7 / 7.9', () => {

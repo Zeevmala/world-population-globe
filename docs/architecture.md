@@ -53,16 +53,32 @@ maximum zoom 7) switched each tier on ~3 zoom levels before its cells were visib
 The tier table and the rule live in **one** place, `pipeline/tiers.py`; every pipeline script
 reads it and `build_parents.py` re-applies it to the whole manifest, which the client reads —
 nothing in `src/` types a band. `scripts/bands.test.mjs` pins the committed manifest to the rule.
-r5 and r7 are not Kontur files (Kontur publishes r4, r6, r8): `pipeline/build_parents.py` rolls
-the committed r6 (r5) and the committed r8 tiles (r7) up to their H3 parents in DuckDB SQL (bit
-arithmetic, no extension) and places each cell at its H3 center (h3ronpy) — populations are
-integers and every parent sum is < 2^24, so the float32 roll-up is exact. r7 fills what was the
-widest gap in the ladder: without it an r6 cell grew from 3 px to 21 px before the 49× jump to r8.
-It is tiled like r8 (same index format, `tiles/r7/parent=<r2>/data_0.parquet`) but by **r2**
-parent: at r7's entry zoom a 1280×800 screen needs ~20 r2 tiles (r3 would need over 60), and an
-r2 tile of r7 cells is at most 0.28 MB (r2 was rejected for r8 only because r8 tiles at r2 reach
-tens of MB). The pipeline needs the r8 pyramid on disk, so the refresh order is
-`data:tiles` → `data` (`docs/data.md` §7).
+
+**The manifest's bands are nominal; the client selects per view** (decided 2026-11-18, the last
+Option A item; `src/lib/tierBands.ts`, `src/lib/tierFit.ts`). A tier starts at the LATER of
+(1) its 3-px threshold moved by log2(cos lat) — GlobeView zooms the whole globe in by 1/cos of the
+view center's latitude — and (2) the zoom from which its cull window cannot hold more than the
+120 k cap: the window's ground area (the canvas rectangle grown by the re-cull drift, cut at the
+horizon — `cullWindow` itself, area summed on an equal-area grid) ÷ the smallest H3 hexagon area
+(0.6 × the mean: cells near the icosahedron's vertices are 0.606×, and one vertex is on populated
+land at Dalian), +3 % for sampling and boundary cells, evaluated HELD 0.15 below the threshold with
+the worst zoom-bucket and Mercator-row alignment (the row's equatorward members zoom by their own
+1/cos, so the window grows with latitude: +5 % at 35°, +35 % at 60°). The fit is by construction —
+no calibrated budget — and it is what a flat budget cannot be: at r5's threshold the limb sits in
+the window, and a flat `W·H ÷ px²` estimate let windows reach 179 k cells over Central Asia (the
+review's scan of the first cut, which used a 65 k on-screen budget). The fit is searched once per
+re-cull canvas key (16 px) and 1° latitude band, at the band's poleward edge (~12 ms; warmed in idle
+time by `useGlobeData`; tier selection itself skips it below the 3-px floor, but the zoom ladder
+asks for the current view's bands at any zoom, so a cold band can still cost one ~12 ms frame). Costs: tiers start 0.45–0.65 zoom later than the first cut's budget on desktop
+canvases (r8 at 8.95 on 1280×800 at the equator, 9.45 on 1920×1080; r5 at 4.91 / 5.44), the
+thresholds step up at 1° band edges by ≤ 0.01 zoom to 60° and ≤ 0.08 at 84° (always under the
+hysteresis), and the nominal bands survive only at the equator on canvases up to ~360×640. The
+0.15-zoom hysteresis applies to the moved threshold, so latitude and canvas jitter cannot flap a
+tier either. Every band consumer reads this one function: selection, the tile streams, the
+whole-tier loader, the search's arrival zoom, the zoom ladder (which draws the bands for the
+current view), `DataStatus`, the render harness, the QA page probe and the cull bench, whose
+`--scan` (3,408 view centres × 5 canvases × 4 tiers, threshold and held) finds no window over the
+cap.
 
 **Integrity check:** every tier sums to **≈ 8.03 B** (2023 world population) — r4 to
 8,031,924,025, r5/r6, the 9 M-cell r7 and the 33 M-cell r8 pyramids to 8,031,924,024. The densest r4 cells resolve to
@@ -85,9 +101,10 @@ Kontur r8 *.gpkg  ──DuckDB(spatial+h3)──▶  COPY … PARTITION_BY(paren
   stream, few enough to commit. (r2 was rejected: single tiles reach tens of MB; r4 → 71 k files.)
 - **Client streaming** (`src/data/useTileStreaming.ts`): **one `TileStream` per tiled manifest
   entry** (its own cache, retry state and timers; nothing in `src/` names a tiled tier), each
-  publishing a `TileSet` to the store's `tiles[lod]`. A stream runs while its band is reached or its
-  tier is on screen (`streamWanted`). On a change of the **tile key — the cull's bucket key**
-  (canvas W×H, zoom in 1/8 steps, center in Mercator steps of 1/6 of the shorter side) it selects
+  publishing a `TileSet` to the store's `tiles[lod]`. A stream runs while its band (for this view's
+  latitude and canvas) is reached or its tier is on screen (`streamWanted`) — during a fly-to, only
+  for the tier the flight ends on. On a change of the **tile key — the cull's bucket key**
+  (canvas W×H rounded up to 16 px, zoom in 1/8 steps, center in Mercator steps of 1/6 of the shorter side) it selects
   the parents (at the entry's `tileParentRes`) whose cells **overlap the key's cull window**
   (`src/lib/tiles.ts` `selectParents`: a flood fill over `gridDisk` neighbours, each cell's edge arcs
   tested exactly against the window's bounding planes — no sampling, no lng/lat seam; h3-js `polygonToCells` reads edges as lng/lat
@@ -97,23 +114,27 @@ Kontur r8 *.gpkg  ──DuckDB(spatial+h3)──▶  COPY … PARTITION_BY(paren
   holds over twice as many (`needsMerge`), since every merge is a new tier object the cull pays
   12 B/cell of unit vectors for. Visible + the prefetch ring fit the 64-tile cache (the ring is cut
   nearest-first when they would not: only at 1920×1080, zoom 8, over the smallest r3 cells —
-  ~50 visible + 32 ring). The bookkeeping lives in `src/data/tileStream.ts` (pure, Node-tested). Visible tiles are awaited with `allSettled`: a
+  ~51 visible + 31 ring — a view where canvas-aware selection no longer picks r8). The bookkeeping lives in `src/data/tileStream.ts` (pure, Node-tested). Visible tiles are awaited with `allSettled`: a
   failed tile never blanks the view — the tiles that loaded are published, the failed one is
   retried on a 2 s / 4 s backoff (and by any later view that wants it), at most 3 attempts per
   burst; a spent tile rests 30 s after its last failure, then gets a fresh burst (the view's retry
   timer wakes for it), so an outage heals instead of leaving permanent holes. One `console.warn`
   per tile per burst; the clock is injectable so Node tests cover all of it.
 - **Render** reuses the same population layer (`layers/populationLayer.ts`); the merged set is viewport-culled like `mid`.
-- **LOD selection** (`selectActive` in `lib/lod.ts`): walk from the finest tier whose band is
-  reached (with hysteresis) down to the first with data **for this view** — a whole tier once
+- **LOD selection** (`selectActive` in `lib/lod.ts`): walk from the finest tier whose threshold
+  for this view (`lib/tierBands.ts`) is reached (with hysteresis) down to the first with data **for this view** — a whole tier once
   loaded, a tiled tier once its published parents cover the screen (`tileSetCovers`: exact on
   the set's own key; off it, the canvas border is walked every 16 px against the settled
   parents). So the tier on screen keeps drawing while the next tier's tiles load, a pan into
   unloaded tiles falls back to the tier below rather than drawing a previous view's tiles, and a
   cold deep link draws the finest tier loaded. The result is published as `activeLod`, which
-  `Controls` reads. **Loading** (`wholeTierFor`, `lib/tierPlan.ts`): only the finest whole tier whose
-  band is reached is fetched, so a cold deep link to street zoom pulls overview + mid (the
-  fallback under the r8 tiles) and skips r5; zooming through a band still loads its tier.
+  `Controls` reads. **Loading** (`wholeTiersFor`, `lib/tierPlan.ts`) plans for the camera, or for
+  the destination of a flight under way (`flyTarget`, cleared on landing): the overview, every
+  whole tier whose band holds the zoom or starts within 0.5 zoom above it (a wheel zoom-in gets a
+  head start), and — when the wanted whole tier has not arrived — the whole tier below it as an
+  interim (a cold deep link into r6's band fetches the 6 MB r5 alongside the 31 MB r6). Nothing is
+  fetched as a fallback under a tiled tier, so a deep link to zoom 9 fetches the overview and
+  tiles only, and a search flight fetches nothing for the bands it crosses.
 - Shared download/decompress/schema/CRS helpers live in `pipeline/kontur_common.py`.
 
 ## 4. Frontend
@@ -131,14 +152,16 @@ src/
     decodeClient.ts     # 2-worker pool, request routing, inline fallback
     h3Column.ts         # packed BigUint64 H3 indices + lazy string materialization
     parquet.ts          # hyparquet column reader (subpath import; inline-fallback path)
-    useGlobeData.ts     # eager overview + lazy r5 / mid by zoom band (wholeTierFor)
+    useGlobeData.ts     # eager overview + lazy r5 / mid as the view (or flight) needs them (wholeTiersFor)
     tileStream.ts       # one tiled tier's tile cache: LRU eviction, dedupe, merge, bounded retry
     useTileStreaming.ts # every tiled tier: tile key → selectParents → tileStream, retry timer, idle ring prefetch
   lib/
     density.ts          # cell area per H3 res, people/km², shared cross-tier domain
-    lod.ts              # pickLod() + selectActive() + hysteresis + cullForView() + quickselect cap
+    lod.ts              # pickLod() + selectActive() + streamWanted() + cullForView() + quickselect cap
     footprint.ts        # what GlobeView shows for a view + canvas; the cull's key and window
-    tierPlan.ts         # wholeTierFor() (which whole tier to fetch) + arrivalZoom() (search fly-to zoom)
+    tierBands.ts        # per-view tier thresholds: 3-px rule or window fit, + latitude; hysteresis
+    tierFit.ts          # when a tier's cull window cannot overfill the cap (ground area ÷ min cell area)
+    tierPlan.ts         # wholeTiersFor() (which whole tiers to fetch) + arrivalZoom() (search fly-to zoom)
     screenScale.ts      # GlobeView px/km + hexagon width — the model the bands are cut from
     zoomLadder.ts       # the zoom ladder's tier bands + cell-size labels, from the manifest
     tiles.ts            # selectParents() (parents overlapping the cull window + ring), tileSetCovers(), tileKey()
@@ -176,16 +199,17 @@ src/
   height at the crossing, and the switch changes only mesh resolution. It rides deck.gl's
   `elevationScale` uniform (with `getElevation` returning normalized 0–1 density), so a zoom
   change costs one uniform write — no attribute re-upload, no re-cull.
-- **Tier hysteresis** — a tier keeps a 0.15-zoom band once on screen (`lib/lod.ts`), so a
-  camera resting on a threshold (3.78 / 5.18 / 6.59 / 7.99) can't oscillate and rebuild the layer every frame. The
+- **Tier hysteresis** — a tier keeps a 0.15-zoom band below its threshold for this view once on
+  screen (`lib/tierBands.ts`), so a camera resting on a threshold — in zoom, latitude or canvas
+  size — can't oscillate and rebuild the layer every frame. The
   rendered tier is published to the store as `activeLod` and fed back in.
 - **Color** — Inferno (perceptually uniform). Rainbow/jet is banned (fabricates breaks).
 - **Performance budget**
   - overview (71 k): rendered whole.
   - r5 (394 k) and mid (2 M): **viewport-culled** to what the canvas actually shows
-    (`lib/footprint.ts`), capped at 120 k cells/frame — on-screen cells first, then by
-    population; cull memoized on a coarse view key that includes the canvas size (no per-tick
-    recompute).
+    (`lib/footprint.ts`), capped at 120 k cells/frame — past the cap, the key's reference
+    view's on-screen cells first, then the margin nearest them; cull memoized on a coarse view
+    key that includes the canvas size rounded up to 16 px (no per-tick or per-resize-frame recompute).
   - r7 (9 M total) and r8 (33 M total): only the visible r2 / r3 tiles are fetched, merged, then
     viewport-culled + capped at 120 k/frame — so render cost is bounded regardless of global cell count.
   - Data is **columnar typed arrays** + deck.gl non-iterable `{length}` accessors → no per-cell objects.
@@ -253,14 +277,12 @@ src/
     0.25 to 1/8 for that bound: at the r5 entry over mid-latitudes the footprint's area grows
     1.8× across a 0.25 zoom step (its corners sit near the limb). When the window holds more
     than the cap (each part capped by an O(n) quickselect on population, `topKByPopulation`),
-    the triggering view's on-screen cells come first, so the view that triggered the cull
-    is drawn complete whenever it has ≤ 120 k cells on screen
-    (`scripts/bench/cull_coverage.mjs`). That is not yet true of every other view on the
-    same key: while the window exceeds the cap, the cells left out are the least populated
-    ones in the margin, and a view that has drifted toward that margin can be missing 3–7 %
-    of its on-screen cells until the next re-cull (measured on r5 and r6 at their entry
-    zooms). The window only fits the cap everywhere once tier selection budgets for the
-    margin — see the selection item in `specs/TODO.md`. Per cell the test
+    what is kept is a function of the key alone: the on-screen cells of the key's reference
+    view (the bucket's center at its zoom) first, then the margin nearest that screen, so
+    every view on the key draws the same cells whichever triggered the cull (it used to be the
+    triggering view's screen, and a neighbour on the key missed 3–7 % of its own). Tier
+    selection now makes the window fit the cap by construction (above), so this path is a
+    safety net the committed data never reaches (`tierFit.test.ts`, the bench's `--scan`). Per cell the test
     is three dot products on cached float32 unit vectors (12 B/cell: 24 MB for mid, 4.7 MB for
     r5, built once per tier object on its first cull, ~50 ms for mid) — no per-cell trig;
     a re-cull of mid costs about what the old cap did (`scripts/bench/cull_bench.mjs`).

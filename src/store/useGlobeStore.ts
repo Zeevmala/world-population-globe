@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import type { GlobeViewState, HoverInfo, LodData, Manifest, TileSet } from '../types'
 import type { Canvas } from '../lib/footprint'
 import { MAX_ZOOM, MIN_ZOOM, wrapLng } from '../lib/camera'
+import { wantedIndex } from '../lib/tierBands'
 import { arrivalZoom } from '../lib/tierPlan'
 import { parseHash } from '../lib/urlState'
 import { prefersReducedMotion } from '../lib/useReducedMotion'
@@ -57,7 +58,11 @@ interface GlobeStore {
   /** True while the user is actively dragging — disables hover picking so the
    * costly picking-buffer re-render doesn't fire on every pointermove. */
   isDragging: boolean
-  /** Pending fly-to destination (animated by `Globe`); null when idle. */
+  /**
+   * Fly-to destination while the flight is under way (animated by `Globe`, cleared by
+   * {@link GlobeStore.landed} when it ends); null when nothing is flying. The loader and
+   * the tile streams plan for it instead of the frames the tween passes through.
+   */
   flyTarget: FlyTarget | null
   /** Tier currently on screen — feeds LOD hysteresis and the scale readout. */
   activeLod: string | null
@@ -81,6 +86,8 @@ interface GlobeStore {
   rotateBy: (deg: number) => void
   zoomBy: (delta: number) => void
   flyTo: (lng: number, lat: number, zoom?: number) => void
+  /** The flight `id` has ended (landed, or jumped under reduced motion): clear `flyTarget` if it is still that one. */
+  landed: (id: number) => void
   toggleAutoRotate: () => void
   setAutoRotate: (on: boolean) => void
 }
@@ -144,18 +151,19 @@ export const useGlobeStore = create<GlobeStore>((set) => ({
       }
     }),
   // Request an animated flight (run by `Globe`); stops auto-rotation. Defaults to a
-  // city-scale zoom inside the finest tier's band (`arrivalZoom`, from the manifest) unless the
-  // current view is already deeper.
+  // city-scale zoom inside the finest tier's band at the destination, on this canvas
+  // (`arrivalZoom`), unless the current view is already deeper.
   flyTo: (lng, lat, zoom) =>
     set((s) => ({
       autoRotate: false,
       flyTarget: {
         longitude: lng,
         latitude: lat,
-        zoom: zoom ?? Math.max(s.viewState.zoom, arrivalZoom(s.manifest)),
+        zoom: zoom ?? Math.min(MAX_ZOOM, Math.max(s.viewState.zoom, arrivalZoom(s.manifest, lat, s.canvas))),
         id: Date.now(),
       },
     })),
+  landed: (id) => set((s) => (s.flyTarget?.id === id ? { flyTarget: null } : s)),
   toggleAutoRotate: () => set((s) => ({ autoRotate: !s.autoRotate })),
   setAutoRotate: (autoRotate) => set({ autoRotate }),
 }))
@@ -164,4 +172,6 @@ export const useGlobeStore = create<GlobeStore>((set) => ({
 // state and drive the camera, e.g. `__globe.getState().setViewState(...)`.
 if (import.meta.env.DEV) {
   ;(globalThis as unknown as { __globe?: typeof useGlobeStore }).__globe = useGlobeStore
+  // The app's tier selection, for QA tooling that must agree with it (`scripts/qa/page-probe.mjs`).
+  ;(globalThis as unknown as { __globeTiers?: { wantedIndex: typeof wantedIndex } }).__globeTiers = { wantedIndex }
 }

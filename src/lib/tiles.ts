@@ -1,7 +1,8 @@
 import { cellToBoundary, cellToLatLng, gridDisk, latLngToCell } from 'h3-js'
 import type { GlobeViewState, TileSet } from '../types'
-import { bucketKey, cameraFor, cullBucket, cullWindow, lngLatToUnit, unprojectPixel } from './footprint'
-import type { Canvas, CullWindow } from './footprint'
+// `.ts` extension: `scripts/bench/cull_coverage.mjs` imports this module under Node's native type stripping.
+import { bucketKey, cameraFor, cullBucket, cullWindow, lngLatToUnit, unprojectPixel } from './footprint.ts'
+import type { Canvas, CullWindow } from './footprint.ts'
 
 /**
  * Which parent tiles a tiled tier needs for a view — chosen from the same footprint
