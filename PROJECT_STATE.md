@@ -393,6 +393,68 @@ that is valid either way.
   the same PR would be the first Actions run of the `verify` + `verify:data` steps this
   sprint added to CI and to the deploy workflow, which are unverified there until then).
 
+## Status: Sprint 9 — Option A: tiers banded by on-screen cell size ✅ ON BRANCH (not merged, not deployed)
+
+Owner decision 2026-11-18: of the two ways forward recorded at the end of Sprint 8, **A** —
+band the LOD tiers by on-screen cell size, add r5 and r7 by aggregating the committed data,
+raise the maximum zoom to 10. Carried out as five factory ticks, in dependency order.
+
+| # | Tick | Change | Commit |
+|---|---|---|---|
+| 1 | 8 | r5 tier (H3-parent roll-up of r6); bands from "a hexagon is 3 px across"; `MAX_ZOOM` 7 → 10 | `1e75ffc1` |
+| 2 | 9 | Cull window from GlobeView's real footprint (`lib/footprint.ts`), canvas size in the cull key | `55c113c3` |
+| 3 | 10 | Tile streaming for any tiled tier; tiles chosen from the cull's own window | `1856cbe5` |
+| 4 | 11 | r7 tier (roll-up of r8), tiled by r2 parents; `verify:data` generic over tiled tiers | `9f3db146` |
+| 5 | 12 | Per-view tier selection: each tier starts where its cull window fits the cap | `404ac720` |
+
+### Before and after
+- **Tiers:** r4 / r6 / r8 switching at zoom 2.2 and 4.5 → r4 / r5 / r6 / r7 / r8, each starting
+  where its cells are legible and its window fits the 120 k cap for the view's latitude and
+  canvas. A 400 m cell is ~12 px at zoom 10; it was under 2 px at the old maximum of 7.
+- **What was on screen:** at zoom 4.6 over Tokyo the 400 m tier drew a patch and left the
+  rest of Japan blank; the mid tier drew a disc covering about half the visible radius. Now a
+  culled tier fills the canvas — seen at 1280×800 over India on r5 and r6, and at 1920×1080
+  over Delhi on r8 — and the bench's scan of 136,320 views finds no window over the cap and
+  no on-screen cell missing.
+- **Data:** five tiers, each summing to 8.03 B (r5 393,791 cells, 6.4 MB; r7 9,012,014 cells
+  in 2,409 tiles, 141 MB). `public/` is 684 MB — 68.6 % of GitHub Pages' 1 GB limit.
+  `verify:data` proves both roll-ups cell by cell (~55 s, was ~22 s).
+- **Render gate:** ~400 s → ~190 s on the software rasterizer after tick 8 (far fewer
+  sub-pixel prisms), ~390–450 s now that it visits five tiers; worst stall ~40 s → ~18–23 s.
+- **Tests:** 150 → 314.
+
+### What the loop caught in this sprint
+Five ticks, four review or gate send-backs, each for something a green gate could not see:
+- **Tick 8:** the checker withheld its pass until three headless checks had been run at the
+  new zooms (they passed) — no code finding.
+- **Tick 10:** the gate went red on a harness step that waited a fixed 30 s for the first-run
+  cue (the rasterizer was slower); then the checker failed the change with counterexamples —
+  tile selection sampled each cell's boundary at a few points and could skip an on-screen
+  tile on a small ground footprint (149 misses in 20,000 high-latitude views). The loop
+  contract's "one retry per tick" would have blocked the item there; it was changed to one
+  send-back per oracle (`c442c5a5`).
+- **Tick 12:** the first cut met its criteria as written, and the checker's wider scan found
+  the r5 window over the cap in 2,518 of 102,240 cases across Central Asia, Russia and Iran,
+  with the triggering view itself losing edge cells — partly the specification's own fault
+  (it had asked for key-only selection past the cap without first guaranteeing the window
+  fits). The specification was amended to require the fit by construction, and a second
+  checker verified the bound against real H3 cell counts.
+Two specification errors were mine and were corrected in the queue: an acceptance criterion
+that contradicted the bench's numbers, and the retry rule above.
+
+### What it cost, and what is open
+- **Coarser on desktop than it needs to be.** The cap guarantee is conservative: on 1920×1080
+  each tier starts about 1.5 zoom later than the 3-px rule (r5 at 5.44, cells 9.5 px across;
+  r4 cells reach ~23 px first), about 1 zoom later on 1280×800. Recovering that is the first
+  queue item; beyond it the 120 k cap itself is the limit, recorded as an owner decision in
+  the Backlog.
+- **Not verified:** anything on a real GPU; the original pipeline scripts end to end (the
+  Kontur source is unreachable from the cloud session — the new tiers are built from the
+  committed data); `verify_live.mjs` against a deployment.
+- **Still waiting on the owner:** a pull request (the CI render-gate item, and the first
+  GitHub Actions run of the test and data-gate steps added in Sprint 8), and the night-lights
+  texture.
+
 ## Iteration loop
 
 Human / sprint cadence (this file is the PM log):
