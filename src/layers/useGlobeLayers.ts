@@ -9,6 +9,7 @@ import { BASE } from '../data/load'
 import { densityDomainMax } from '../lib/density'
 import { cullForView, cullKeyFor, selectActive } from '../lib/lod'
 import { EARTH_RADIUS_M, maxColumnHeightM } from '../lib/scales'
+import { tileSetCovers } from '../lib/tiles'
 import { useGlobeStore } from '../store/useGlobeStore'
 import { buildPopulationLayer } from './populationLayer'
 
@@ -24,7 +25,7 @@ const LAND_URL = `${BASE}data/land.geojson`
 /** Assemble the globe layer stack: ocean sphere, land outline, population columns. */
 export function useGlobeLayers(): Layer[] {
   const data = useGlobeStore((s) => s.data)
-  const r8Data = useGlobeStore((s) => s.r8Data)
+  const tiles = useGlobeStore((s) => s.tiles)
   const manifest = useGlobeStore((s) => s.manifest)
   const viewState = useGlobeStore((s) => s.viewState)
   const canvas = useGlobeStore((s) => s.canvas)
@@ -34,7 +35,7 @@ export function useGlobeLayers(): Layer[] {
   const setHover = useGlobeStore((s) => s.setHover)
 
   const domainMax = useMemo(() => densityDomainMax(manifest), [manifest])
-  const { entry, data: lodData } = selectActive(viewState, manifest, data, r8Data, activeLod)
+  const { entry, data: lodData } = selectActive(viewState, canvas, manifest, data, tiles, activeLod, tileSetCovers)
 
   // Publish the tier actually on screen. Feeding it back as `activeLod` is what gives
   // `selectActive` its hysteresis, and the UI reads it for the scale readout. The

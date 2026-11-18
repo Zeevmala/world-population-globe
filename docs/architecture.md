@@ -75,20 +75,35 @@ Kontur r8 *.gpkg  ──DuckDB(spatial+h3)──▶  COPY … PARTITION_BY(paren
 
 - **Tiling at H3 r3** (~3.4° cells): 12,761 tiles, mean ~32 KB, max 0.27 MB — small enough to
   stream, few enough to commit. (r2 was rejected: single tiles reach tens of MB; r4 → 71 k files.)
-- **Client streaming** (`src/data/useTileStreaming.ts`): on a coarse view-key change, compute the
-  visible parents (`src/lib/tiles.ts` → h3-js `latLngToCell` + `gridDisk`, k scaled by zoom),
-  fetch the missing tiles (`readColumns`), **LRU-cache** (64 tiles, in-flight-deduped), and merge
-  the visible tiles' typed arrays into one `LodData` published to the store. The bookkeeping lives
-  in `src/data/tileStream.ts` (pure, Node-tested). Visible tiles are awaited with `allSettled`: a
+- **Client streaming** (`src/data/useTileStreaming.ts`): **one `TileStream` per tiled manifest
+  entry** (its own cache, retry state and timers; nothing in `src/` names a tiled tier), each
+  publishing a `TileSet` to the store's `tiles[lod]`. A stream runs while its band is reached or its
+  tier is on screen (`streamWanted`). On a change of the **tile key — the cull's bucket key**
+  (canvas W×H, zoom in 1/8 steps, center in Mercator steps of 1/6 of the shorter side) it selects
+  the parents (at the entry's `tileParentRes`) whose cells **overlap the key's cull window**
+  (`src/lib/tiles.ts` `selectParents`: a flood fill over `gridDisk` neighbours, each cell's edge arcs
+  tested exactly against the window's bounding planes — no sampling, no lng/lat seam; h3-js `polygonToCells` reads edges as lng/lat
+  lines and takes any > 180° span as antimeridian-crossing), so every view sharing the key has
+  its tiles. It fetches the missing ones, **LRU-caches** them (64 tiles, in-flight-deduped) and
+  merges the typed arrays into one `LodData` — only when the drawn merge lacks a loaded tile or
+  holds over twice as many (`needsMerge`), since every merge is a new tier object the cull pays
+  12 B/cell of unit vectors for. Visible + the prefetch ring fit the 64-tile cache (the ring is cut
+  nearest-first when they would not: only at 1920×1080, zoom 8, over the smallest r3 cells —
+  ~50 visible + 32 ring). The bookkeeping lives in `src/data/tileStream.ts` (pure, Node-tested). Visible tiles are awaited with `allSettled`: a
   failed tile never blanks the view — the tiles that loaded are published, the failed one is
   retried on a 2 s / 4 s backoff (and by any later view that wants it), at most 3 attempts per
   burst; a spent tile rests 30 s after its last failure, then gets a fresh burst (the view's retry
   timer wakes for it), so an outage heals instead of leaving permanent holes. One `console.warn`
   per tile per burst; the clock is injectable so Node tests cover all of it.
 - **Render** reuses the same population layer (`layers/populationLayer.ts`); the merged set is viewport-culled like `mid`.
-- **LOD selection** (`selectActive` in `lib/lod.ts`): r8 wins once zoom ≥ its manifest `minZoom`
-  (7.99) and tiles are merged; otherwise the finest loaded whole tier (`pickLod`). Shared by
-  `useGlobeLayers` and `Controls`. **Loading** (`wholeTierFor`, `lib/tierPlan.ts`): only the finest whole tier whose
+- **LOD selection** (`selectActive` in `lib/lod.ts`): walk from the finest tier whose band is
+  reached (with hysteresis) down to the first with data **for this view** — a whole tier once
+  loaded, a tiled tier once its published parents cover the screen (`tileSetCovers`: exact on
+  the set's own key; off it, the canvas border is walked every 16 px against the settled
+  parents). So the tier on screen keeps drawing while the next tier's tiles load, a pan into
+  unloaded tiles falls back to the tier below rather than drawing a previous view's tiles, and a
+  cold deep link draws the finest tier loaded. The result is published as `activeLod`, which
+  `Controls` reads. **Loading** (`wholeTierFor`, `lib/tierPlan.ts`): only the finest whole tier whose
   band is reached is fetched, so a cold deep link to street zoom pulls overview + mid (the
   fallback under the r8 tiles) and skips r5; zooming through a band still loads its tier.
 - Shared download/decompress/schema/CRS helpers live in `pipeline/kontur_common.py`.
@@ -109,8 +124,8 @@ src/
     h3Column.ts         # packed BigUint64 H3 indices + lazy string materialization
     parquet.ts          # hyparquet column reader (subpath import; inline-fallback path)
     useGlobeData.ts     # eager overview + lazy r5 / mid by zoom band (wholeTierFor)
-    tileStream.ts       # r8 tile cache: selection, LRU eviction, dedupe, merge, bounded retry
-    useTileStreaming.ts # r8 viewport hook: view key → tileStream, retry timer, idle ring prefetch
+    tileStream.ts       # one tiled tier's tile cache: LRU eviction, dedupe, merge, bounded retry
+    useTileStreaming.ts # every tiled tier: tile key → selectParents → tileStream, retry timer, idle ring prefetch
   lib/
     density.ts          # cell area per H3 res, people/km², shared cross-tier domain
     lod.ts              # pickLod() + selectActive() + hysteresis + cullForView() + quickselect cap
@@ -118,7 +133,7 @@ src/
     tierPlan.ts         # wholeTierFor() (which whole tier to fetch) + arrivalZoom() (search fly-to zoom)
     screenScale.ts      # GlobeView px/km + hexagon width — the model the bands are cut from
     zoomLadder.ts       # the zoom ladder's tier bands + cell-size labels, from the manifest
-    tiles.ts            # visibleParents() + prefetchParents() (h3-js gridDisk) + coarse view key
+    tiles.ts            # selectParents() (parents overlapping the cull window + ring), tileSetCovers(), tileKey()
     scales.ts           # zoom-continuous column height + earth constants
     colorRamp.ts        # Inferno ramp (RGB + CSS)
     format.ts           # population / lat-lng formatting
@@ -241,9 +256,9 @@ src/
     is three dot products on cached float32 unit vectors (12 B/cell: 24 MB for mid, 4.7 MB for
     r5, built once per tier object on its first cull, ~50 ms for mid) — no per-cell trig;
     a re-cull of mid costs about what the old cap did (`scripts/bench/cull_bench.mjs`).
-  - **Idle tile prefetch** — after the visible r8 tiles merge, a `requestIdleCallback` warms the
-    `gridDisk` k+1 ring into the LRU cache (no `setR8Data`, so no rebuild), with visible-protecting
-    eviction — so panning reveals ready tiles instead of empty gaps.
+  - **Idle tile prefetch** — after the visible tiles merge, a `requestIdleCallback` warms the ring
+    of parents around them into the LRU cache (no publish, so no rebuild), with visible-protecting
+    eviction — so panning reveals ready tiles instead of falling back.
 
 ## 5. Deploy
 

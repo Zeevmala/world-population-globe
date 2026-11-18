@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { GlobeViewState, HoverInfo, LodData, Manifest } from '../types'
+import type { GlobeViewState, HoverInfo, LodData, Manifest, TileSet } from '../types'
 import type { Canvas } from '../lib/footprint'
 import { MAX_ZOOM, MIN_ZOOM, wrapLng } from '../lib/camera'
 import { arrivalZoom } from '../lib/tierPlan'
@@ -45,9 +45,10 @@ const ZOOM_TWEEN_MS = 420
 
 interface GlobeStore {
   manifest: Manifest | null
+  /** Whole tiers, by tier name, once loaded. */
   data: Record<string, LodData>
-  /** Merged, viewport-scoped r8 tiles (streamed); null until deep zoom. */
-  r8Data: LodData | null
+  /** Tiled tiers, by tier name: what each tier's stream last published (`useTileStreaming`). */
+  tiles: Record<string, TileSet>
   status: Status
   error: string | null
   hover: HoverInfo | null
@@ -69,7 +70,7 @@ interface GlobeStore {
 
   setManifest: (m: Manifest) => void
   addData: (d: LodData) => void
-  setR8Data: (d: LodData | null) => void
+  setTiles: (t: TileSet) => void
   setStatus: (s: Status) => void
   setError: (e: string) => void
   setHover: (h: HoverInfo | null) => void
@@ -87,7 +88,7 @@ interface GlobeStore {
 export const useGlobeStore = create<GlobeStore>((set) => ({
   manifest: null,
   data: {},
-  r8Data: null,
+  tiles: {},
   status: 'idle',
   error: null,
   hover: null,
@@ -102,7 +103,7 @@ export const useGlobeStore = create<GlobeStore>((set) => ({
 
   setManifest: (manifest) => set({ manifest }),
   addData: (d) => set((s) => ({ data: { ...s.data, [d.lod]: d } })),
-  setR8Data: (r8Data) => set({ r8Data }),
+  setTiles: (t) => set((s) => (s.tiles[t.lod] === t ? s : { tiles: { ...s.tiles, [t.lod]: t } })),
   setStatus: (status) => set({ status }),
   setError: (error) => set({ error, status: 'error' }),
   setHover: (hover) => set({ hover }),
@@ -143,7 +144,7 @@ export const useGlobeStore = create<GlobeStore>((set) => ({
       }
     }),
   // Request an animated flight (run by `Globe`); stops auto-rotation. Defaults to a
-  // city-scale zoom inside the r8 band (`arrivalZoom`, from the manifest) unless the
+  // city-scale zoom inside the finest tier's band (`arrivalZoom`, from the manifest) unless the
   // current view is already deeper.
   flyTo: (lng, lat, zoom) =>
     set((s) => ({

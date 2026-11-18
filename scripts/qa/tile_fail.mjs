@@ -1,19 +1,20 @@
 #!/usr/bin/env node
 /**
- * tile_fail — headless confirmation that ONE failed r8 tile does not blank the r8 tier.
+ * tile_fail — headless confirmation that ONE failed tile does not blank a tiled tier.
  *
- * Opens the dev server deep-linked to Tokyo one zoom level inside the r8 band (read
- * from the manifest: `#139.7/35.68/8.99` with r8 from 7.99),
- * aborts every request for the r3 tile under the camera (Playwright `route.abort`,
+ * Takes the finest tiled tier in the manifest (r8 today) and opens the dev server
+ * deep-linked to Tokyo one zoom level inside its band (`#139.7/35.68/8.99` with r8 from
+ * 7.99), aborts every request for the parent tile under the camera (Playwright `route.abort`,
  * on the browser context so the decode worker's fetches are intercepted too), and
- * waits for the app to publish r8 anyway. PASS = `activeLod === 'r8'` with r8 cells
- * > 0, the aborted tile really was requested, and no unhandled promise rejection.
+ * waits for the app to publish the tier anyway. PASS = `activeLod` is the tier, with its
+ * merged cells (`tiles[tier].data`) > 0 and aligned, the aborted tile really was
+ * requested, and no unhandled promise rejection.
  *
  * Before the fix, the visible tiles were awaited with `Promise.all`: the one abort
  * rejected the lot, nothing was merged, and the rejection went unhandled.
  *
  * With `--fail-times N` only the first N requests for that tile are aborted, so the
- * bounded retry can be seen recovering it (the tile's cells then join the r8 tier).
+ * bounded retry can be seen recovering it (the tile's cells then join the tier).
  *
  * With `--fail-worker` it checks the decode-worker fallback instead: every request for
  * the decode worker's module script is aborted, so each pool worker fails to load and
@@ -47,10 +48,16 @@ const PORT = Number(opt('port', '5199'))
 const TIMEOUT_MS = Number(opt('timeout-ms', '300000'))
 // After the abort has been seen, give up once no tile has been requested for this long.
 const QUIET_MS = 45_000
-// An r8 view: one zoom level past the r8 band's start in the committed manifest.
-const R8 = JSON.parse(readFileSync(join(ROOT, 'public', 'data', 'manifest.json'), 'utf8')).lods.find((l) => l.lod === 'r8')
-const VIEW = { lng: 139.7, lat: 35.68, zoom: Math.round((R8.minZoom + 1) * 100) / 100 }
-const PARENT = opt('parent', latLngToCell(VIEW.lat, VIEW.lng, 3))
+// The finest tiled tier in the committed manifest (r8 today), viewed one zoom level past
+// the start of its band; the tile aborted is its parent (at the tier's tileParentRes)
+// under the camera.
+const TIER = JSON.parse(readFileSync(join(ROOT, 'public', 'data', 'manifest.json'), 'utf8'))
+  .lods.filter((l) => l.tiled)
+  .at(-1)
+const VIEW = { lng: 139.7, lat: 35.68, zoom: Math.round((TIER.minZoom + 1) * 100) / 100 }
+const PARENT = opt('parent', latLngToCell(VIEW.lat, VIEW.lng, TIER.tileParentRes))
+// Tile URLs live beside the tier's index: `data/tiles/<tier>/parent=<h3>/…`.
+const TILE_DIR = TIER.indexFile.slice(0, TIER.indexFile.lastIndexOf('/'))
 const FAIL_TIMES = Number(opt('fail-times', 'Infinity'))
 const FAIL_WORKER = args.includes('--fail-worker')
 
@@ -158,7 +165,7 @@ async function main() {
     })
     // One route for every r8 tile request, so tile activity is tracked even though the
     // fetches come from the decode worker (whose requests never reach `page.on`).
-    await context.route('**/data/tiles/r8/parent=*/**', (route) => {
+    await context.route(`**/${TILE_DIR}/parent=*/**`, (route) => {
       lastTileActivity = Date.now()
       if (!route.request().url().includes(`parent=${PARENT}/`)) return route.continue()
       if (aborts.length >= FAIL_TIMES) {
@@ -176,33 +183,30 @@ async function main() {
     await page.goto(url, { waitUntil: 'load', timeout: 120_000 })
 
     const read = () =>
-      page.evaluate(() => {
+      page.evaluate((lod) => {
         const s = window.__globe?.getState()
+        const d = s?.tiles?.[lod]?.data ?? null
         return {
           activeLod: s?.activeLod ?? null,
-          r8Cells: s?.r8Data ? s.r8Data.h3.length : 0,
-          r8Aligned: s?.r8Data
-            ? [s.r8Data.population.length, s.r8Data.lng.length, s.r8Data.lat.length].every(
-                (n) => n === s.r8Data.h3.length,
-              )
-            : null,
+          tierCells: d ? d.h3.length : 0,
+          aligned: d ? [d.population.length, d.lng.length, d.lat.length].every((n) => n === d.h3.length) : null,
           zoom: s?.viewState.zoom ?? null,
           rejections: window.__qaRejections ?? [],
         }
-      })
+      }, TIER.lod)
 
     const deadline = t0 + TIMEOUT_MS
     let state = await read()
     let lastLog = 0
     for (;;) {
       state = await read().catch(() => state)
-      if (state.activeLod === 'r8' && state.r8Cells > 0 && aborts.length > 0) break
+      if (state.activeLod === TIER.lod && state.tierCells > 0 && aborts.length > 0) break
       const now = Date.now()
       if (now > deadline) break
       if (aborts.length > 0 && now - lastTileActivity > QUIET_MS) break
       if (now - lastLog > 10_000) {
         lastLog = now
-        log(`waiting: activeLod=${state.activeLod} r8Cells=${state.r8Cells} aborts=${aborts.length}`)
+        log(`waiting: activeLod=${state.activeLod} ${TIER.lod}Cells=${state.tierCells} aborts=${aborts.length}`)
       }
       await new Promise((r) => setTimeout(r, 500))
     }
@@ -229,9 +233,9 @@ async function main() {
     ]
     const checks = {
       abortedTileRequested: aborts.length > 0,
-      activeLodIsR8: state.activeLod === 'r8',
-      r8CellsPositive: state.r8Cells > 0,
-      columnsAligned: state.r8Aligned === true,
+      [`activeLodIs_${TIER.lod}`]: state.activeLod === TIER.lod,
+      tierCellsPositive: state.tierCells > 0,
+      columnsAligned: state.aligned === true,
       noUnhandledRejection: unhandled.length === 0,
     }
     result = { pass: Object.values(checks).every(Boolean), checks, state, aborts, unhandled, tileWarnings }
@@ -240,7 +244,7 @@ async function main() {
     await server.stop()
   }
 
-  log(`activeLod=${result.state.activeLod} r8Cells=${result.state.r8Cells} aligned=${result.state.r8Aligned}`)
+  log(`activeLod=${result.state.activeLod} ${TIER.lod}Cells=${result.state.tierCells} aligned=${result.state.aligned}`)
   log(`aborted requests for ${PARENT}: ${result.aborts.length} (at ms ${result.aborts.join(', ')})`)
   log(`unhandled rejections / page errors: ${result.unhandled.length}${result.unhandled.length ? ' — ' + result.unhandled.join(' | ') : ''}`)
   log(`tile console.warn lines: ${result.tileWarnings.length}${result.tileWarnings.length ? ' — ' + result.tileWarnings.join(' | ') : ''}`)

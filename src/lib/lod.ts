@@ -1,4 +1,4 @@
-import type { GlobeViewState, LodData, LodEntry, Manifest } from '../types'
+import type { GlobeViewState, LodData, LodEntry, Manifest, TileSet } from '../types'
 // `.ts` extension: `scripts/bench/*.mjs` import this module under Node's native type stripping.
 import { bucketKey, cameraFor, cullBucket, cullWindow } from './footprint.ts'
 import type { Canvas } from './footprint.ts'
@@ -15,8 +15,9 @@ const MAX_RENDERED_CELLS = 120_000
 const TIER_HYSTERESIS = 0.15
 
 /**
- * Choose the active LOD name for the current zoom: the finest tier whose
- * `minZoom` is satisfied AND whose data is already loaded, else the coarsest.
+ * Choose the active LOD name for the current zoom among the whole (loaded) tiers: the
+ * finest tier whose `minZoom` is satisfied AND whose data is already loaded, else the
+ * coarsest loaded. Tiled tiers are never in `loaded`; {@link selectActive} handles them.
  */
 export function pickLod(
   zoom: number,
@@ -38,26 +39,57 @@ function entryZoom(entry: LodEntry, activeLod?: string | null): number {
 }
 
 /**
- * Resolve the active tier + its data for the current view. The tiled r8 tier
- * wins when its zoom band is reached and viewport tiles are merged & ready;
- * otherwise fall back to the finest loaded whole tier ({@link pickLod}).
- * Pass the currently-rendered tier as `activeLod` to apply {@link TIER_HYSTERESIS}
- * so a camera parked on a threshold doesn't oscillate between tiers.
+ * Whether a tiled tier's stream should be following the camera: while the zoom is in the
+ * tier's band (no early entry — the same rule as selection), and while the tier is the one
+ * on screen, as long as selection could still keep it — inside its hysteresis on the way
+ * out, or past its band while a finer tier's tiles load — so the tier being drawn keeps its
+ * tiles current under a pan. Never below `minZoom − TIER_HYSTERESIS`, where selection
+ * cannot pick the tier: after a jump out (a ladder click from 9 to 3) the hook can still
+ * see the old `activeLod` for one render, and at zoom 3 the footprint holds ~2,000 r3
+ * parents. Two adjacent tiled tiers are never both streaming, except while the coarser is
+ * on screen and the finer is loading, or the finer is held inside its hysteresis.
+ */
+export function streamWanted(entry: LodEntry, zoom: number, activeLod?: string | null): boolean {
+  if (zoom < entryZoom(entry, activeLod)) return false
+  return entry.lod === activeLod || zoom < entry.maxZoom
+}
+
+/** Does a tiled tier's published set draw the whole screen of this view? (`lib/tiles.ts` `tileSetCovers`) */
+export type TileCoverage = (set: TileSet, view: GlobeViewState, canvas: Canvas) => boolean
+
+/**
+ * Resolve the active tier + its data for the current view: walk from the finest tier whose
+ * band the zoom has reached (with {@link TIER_HYSTERESIS} for the tier now on screen,
+ * `activeLod`) down to the first tier that has data for this view — a whole tier once it
+ * is loaded, a tiled tier once its published tiles cover the screen (`covers`). So the
+ * tier already on screen keeps drawing while the next one's tiles load, a pan into tiles
+ * not loaded yet falls back to the tier below instead of drawing a previous view's
+ * tiles over a screen they do not cover, and a cold deep link draws the finest tier that
+ * is loaded. If nothing at or below the wanted tier has data, the coarsest loaded tier.
  */
 export function selectActive(
   view: GlobeViewState,
+  canvas: Canvas,
   manifest: Manifest | null,
   loaded: Record<string, LodData>,
-  r8Data: LodData | null,
-  activeLod?: string | null,
+  tiles: Record<string, TileSet>,
+  activeLod: string | null | undefined,
+  covers: TileCoverage,
 ): { entry?: LodEntry; data?: LodData } {
   if (!manifest) return {}
-  const r8 = manifest.lods.find((l) => l.lod === 'r8')
-  if (r8 && view.zoom >= entryZoom(r8, activeLod) && r8Data && r8Data.h3.length > 0) {
-    return { entry: r8, data: r8Data }
+  const { lods } = manifest
+  for (let i = lods.length - 1; i >= 0; i--) {
+    const entry = lods[i]
+    if (view.zoom < entryZoom(entry, activeLod)) continue
+    if (entry.tiled) {
+      const set = tiles[entry.lod]
+      if (set?.data && set.data.h3.length > 0 && covers(set, view, canvas)) return { entry, data: set.data }
+    } else if (loaded[entry.lod]) {
+      return { entry, data: loaded[entry.lod] }
+    }
   }
-  const lod = pickLod(view.zoom, manifest, loaded, activeLod)
-  return { entry: manifest.lods.find((l) => l.lod === lod), data: lod ? loaded[lod] : undefined }
+  const entry = lods.find((l) => !l.tiled && loaded[l.lod])
+  return entry ? { entry, data: loaded[entry.lod] } : {}
 }
 
 /**
@@ -119,7 +151,7 @@ export function cullKeyFor(data: LodData | undefined, view: GlobeViewState, canv
  * Per-tier unit vectors (three float32 columns) — what the cull tests instead of paying
  * four trig calls per cell on every re-cull. Built once per tier object on its first cull
  * and dropped with it (weak key). 12 B per cell: 4.7 MB for r5 (393,791 cells), 24.2 MB
- * for mid (2,016,971 cells), 12 B × the merged cell count for an r8 tile set; no other
+ * for mid (2,016,971 cells), 12 B × the merged cell count of each published tile set; no other
  * tier is culled (the overview renders whole). Float32 places a cell within ~1 m.
  */
 interface UnitColumns {

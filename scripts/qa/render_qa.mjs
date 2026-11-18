@@ -106,10 +106,15 @@ const HERO_ZOOM = 1.3
 
 /**
  * The first-run cue (`src/components/FirstRunCue.tsx`) covers the middle of every shot.
- * `App.tsx` remembers its dismissal in localStorage under `INTRO_KEY` (written by the
- * card's Dismiss button, its close-on-first-pick and Escape) — seeding that key before
- * boot is the app's own "already dismissed". The key is read from the source, so a bump
- * of it (v1 → v2, to re-show changed copy) cannot quietly bring the card back into the shots.
+ * It is left to mount on boot — a fresh browser profile has never dismissed it — and is
+ * closed through its own Dismiss button before the first capture ({@link dismissCue}),
+ * so the gate renders it once and an error in it reaches the gate. `App` then remembers
+ * the dismissal in localStorage under `INTRO_KEY`, so it stays closed for the run.
+ *
+ * When it mounts (`App.tsx`): `introOpen` — localStorage[INTRO_KEY] !== 'seen' when App
+ * first rendered — AND the store's `status === 'ready'` (the overview has loaded); then
+ * the lazy `FirstRunCue` chunk is imported under a `Suspense` with no fallback. No timer
+ * is involved. The key is read from the source, so a bump of it (v1 → v2) is followed.
  */
 function introKey(root) {
   const src = readFileSync(join(root, 'src', 'App.tsx'), 'utf8')
@@ -120,10 +125,22 @@ function introKey(root) {
 
 /** The cue's landmark (`FirstRunCue.tsx`). */
 const CUE_SELECTOR = 'section[aria-label="How to read this globe"]'
+/** The cue's lazy chunk: `/src/components/FirstRunCue.tsx` in dev, `assets/FirstRunCue-<hash>.js` built. */
+const CUE_CHUNK = /FirstRunCue/
+/**
+ * How long the cue may take to appear (and then to close) once it is due, counted only
+ * while the page is answering: SwiftShader blocks the main thread for 8–13 s per
+ * overview frame, and a poll that cannot run then is not the cue's fault. Both bounds
+ * must be exceeded to fail — 3 min of wall clock AND 60 polls the page answered.
+ */
+const CUE_WAIT_MS = 180_000
+const CUE_WAIT_POLLS = 60
+/** Set once the cue was seen to close and its dismissal was recorded (see `capture`). */
+let cueDismissed = false
 
 function loadBands(root) {
   const manifest = JSON.parse(readFileSync(join(root, 'public', 'data', 'manifest.json'), 'utf8'))
-  return manifest.lods.map(({ lod, minZoom, maxZoom }) => ({ lod, minZoom, maxZoom }))
+  return manifest.lods.map(({ lod, minZoom, maxZoom, tiled }) => ({ lod, minZoom, maxZoom, tiled: !!tiled }))
 }
 
 /** The tier the app should show at this zoom: the finest whose band is reached. */
@@ -284,7 +301,7 @@ function gitInfo(root) {
 /** Has the tier we expect at this zoom actually got data behind it? */
 function tierAvailable(state, tier) {
   if (!state || state.error) return false
-  if (tier === 'r8') return state.r8Cells > 0
+  if (BANDS.find((b) => b.lod === tier)?.tiled) return ((state.tiledCells || {})[tier] || 0) > 0
   return (state.loadedLods || []).includes(tier)
 }
 
@@ -325,14 +342,106 @@ async function settleAt(page, ctx, { tier, timeoutMs, quietMs = 5000 }) {
   }
 }
 
+/**
+ * Mount the first-run cue once and close it as a visitor does, deterministically: wait
+ * for the condition that makes it due (see {@link introKey}), then for the cue itself,
+ * click its own Dismiss button, and confirm it detached and `App` recorded the dismissal.
+ * Every probe is a `page.evaluate`, which runs only when the page's main thread is free —
+ * so a long software-rasterized frame stretches the wait instead of failing it.
+ *
+ * Outcomes:
+ *  - its chunk request failed or returned an error status → FAIL (lazy chunk broken);
+ *  - a page error while it was due, and it never mounted → FAIL (it threw while
+ *    rendering — `React.lazy` / the component — and took the tree down with it);
+ *  - due, the page answering, and still not mounted past both bounds → FAIL (it no longer
+ *    mounts on a fresh profile);
+ *  - its Dismiss button did not detach it, or the dismissal was not stored → FAIL;
+ *  - the app never reached `ready` (or reported `error`) → not judged here: the cue is not
+ *    due, and the boot failure is the run's own failure;
+ *  - storage blocked (the cue then reopens every visit by design) → WARN, closed anyway.
+ */
+async function dismissCue(page, findings, { key, pageErrors, cueNet }) {
+  const probe = () =>
+    page.evaluate(
+      ({ sel, key }) => {
+        const store = window.__globe
+        const status = store ? store.getState().status : 'ready' // built target: no handle; due on load
+        let seen
+        try {
+          seen = localStorage.getItem(key)
+        } catch {
+          seen = 'blocked'
+        }
+        return { status, seen, mounted: !!document.querySelector(sel) }
+      },
+      { sel: CUE_SELECTOR, key },
+    )
+  const errorsBefore = pageErrors.length
+  /** Poll until `done(state)`; null when both bounds ran out (or the app failed). */
+  const until = async (done) => {
+    const t0 = Date.now()
+    let polls = 0
+    for (;;) {
+      const st = await probe().catch(() => null)
+      if (st) {
+        polls++
+        if (done(st)) return st
+        if (st.status === 'error') return st
+      }
+      if (cueNet.failed.length) return null
+      if (Date.now() - t0 > CUE_WAIT_MS && polls >= CUE_WAIT_POLLS) return null
+      await new Promise((r) => setTimeout(r, 250))
+    }
+  }
+
+  const due = await until((st) => st.status === 'ready')
+  if (!due || due.status !== 'ready') {
+    if (cueNet.failed.length) findings.failures.push(`the first-run cue's chunk failed to load: ${cueNet.failed.join(' | ')}`)
+    else log(`first-run cue not judged: the app did not reach ready (status=${due ? due.status : 'unknown'})`)
+    return
+  }
+  if (due.seen === 'seen') {
+    findings.failures.push('the first-run cue was already marked seen on a fresh profile — it was never shown')
+    return
+  }
+  const shown = await until((st) => st.mounted)
+  if (!shown || !shown.mounted) {
+    const thrown = pageErrors.slice(errorsBefore).map((e) => e.text)
+    if (cueNet.failed.length) findings.failures.push(`the first-run cue's chunk failed to load: ${cueNet.failed.join(' | ')}`)
+    else if (thrown.length) findings.failures.push(`the first-run cue never mounted — page error while it was due: ${thrown.join(' | ')}`)
+    else findings.failures.push(`the first-run cue never mounted although it was due (status ready, not seen; chunk requested ${cueNet.requested}×)`)
+    return
+  }
+  // Actionability waits on the page too, so the click gets the same ceiling.
+  await page
+    .locator(CUE_SELECTOR)
+    .getByRole('button', { name: 'Dismiss' })
+    .click({ timeout: CUE_WAIT_MS })
+    .catch((err) => findings.failures.push(`the first-run cue's Dismiss button could not be clicked: ${err.message.split('\n')[0]}`))
+  const closed = await until((st) => !st.mounted && st.seen !== null)
+  if (!closed || closed.mounted) {
+    findings.failures.push('the first-run cue did not close through its Dismiss button')
+  } else if (closed.seen === 'blocked') {
+    findings.warnings.push('first-run cue: localStorage is blocked, so its dismissal cannot be remembered')
+  } else if (closed.seen !== 'seen') {
+    findings.failures.push(`the first-run cue closed but its dismissal was not stored (localStorage[${key}] = ${closed.seen})`)
+  } else {
+    cueDismissed = true
+    log('first-run cue mounted, dismissed through its own button, dismissal stored')
+  }
+}
+
 /** Screenshot + decode + score. A PNG that scores blank is a failure, not a file. */
 async function capture(page, opts, id, findings) {
   if (!opts.screenshots) return null
-  // Belt and braces for the seeded dismissal (see `introKey`): a cue on screen is closed
-  // through its own Dismiss button, and reported, before the shot.
+  // Unreachable in a healthy run: `dismissCue` closed the cue and saw its dismissal stored.
+  // A cue on screen after that means `App` ignored its own stored dismissal — a real bug,
+  // so a FAILURE. If `dismissCue` already failed (it never saw the cue close), that is the
+  // failure on record; the cue is only closed here so it does not spoil the shot.
   const cue = page.locator(CUE_SELECTOR)
   if (await cue.count()) {
-    findings.warnings.push(`${id}: the first-run cue was on screen despite the seeded dismissal — closed before capture`)
+    if (cueDismissed) findings.failures.push(`${id}: the first-run cue reappeared after its dismissal was stored`)
+    else findings.warnings.push(`${id}: the first-run cue was on screen (its boot-time dismissal failed — see that failure) — closed before capture`)
     await cue.getByRole('button', { name: 'Dismiss' }).click().catch(() => {})
     await page.waitForSelector(CUE_SELECTOR, { state: 'detached', timeout: 5000 }).catch(() => {})
   }
@@ -391,13 +500,6 @@ async function main() {
   if (!preflight.ok) findings.failures.push(`headless WebGL2 preflight failed: ${preflight.reason || 'cleared pixel mismatch'}`)
 
   await page.addInitScript(PROBE_INIT)
-  await page.addInitScript((key) => {
-    try {
-      localStorage.setItem(key, 'seen')
-    } catch {
-      /* storage unavailable: the capture-time check below dismisses the card instead */
-    }
-  }, introKey(opts.url ? REPO_ROOT : opts.root))
 
   const ctx = { phase: 'boot', inFlight: 0, lastNetworkAt: Date.now() }
   const consoleErrors = []
@@ -411,6 +513,14 @@ async function main() {
     else if (msg.type() === 'warning') consoleWarnings.push(entry)
   })
   page.on('pageerror', (err) => pageErrors.push({ phase: ctx.phase, text: err.message }))
+  // The cue's lazy chunk, watched from the first request (it is fetched as soon as the app is ready).
+  const cueNet = { requested: 0, failed: [] }
+  page.on('request', (req) => {
+    if (CUE_CHUNK.test(req.url())) cueNet.requested++
+  })
+  page.on('response', (res) => {
+    if (CUE_CHUNK.test(res.url()) && res.status() >= 400) cueNet.failed.push(`${res.status()} ${res.url()}`)
+  })
   page.on('request', (req) => {
     if (/\.(parquet|json|geojson)(\?|$)/.test(req.url())) {
       ctx.inFlight += 1
@@ -426,6 +536,7 @@ async function main() {
   page.on('requestfinished', settleRequest)
   page.on('requestfailed', (req) => {
     settleRequest(req)
+    if (CUE_CHUNK.test(req.url())) cueNet.failed.push(`${req.failure()?.errorText} ${req.url()}`)
     findings.warnings.push(`request failed (${ctx.phase}): ${req.url()} — ${req.failure()?.errorText}`)
   })
 
@@ -464,6 +575,10 @@ async function main() {
       `canvas readback is blank (stdev=${readback.stdev}, distinctColors=${readback.distinctColors}) — nothing is being rasterised`,
     )
   }
+
+  // ---- the first-run cue: mounted once, closed by its own button -----------
+  ctx.phase = 'first-run-cue'
+  await dismissCue(page, findings, { key: introKey(opts.url ? REPO_ROOT : opts.root), pageErrors, cueNet })
 
   // ---- run the plan -------------------------------------------------------
   const plan = buildPlan(opts.quick)

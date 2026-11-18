@@ -43,29 +43,6 @@ Option A (decided 2026-11-18, see **Backlog**) comes first, as five items in dep
 order — each leaves the app coherent on its own. The two items after them each wait on
 something outside the session.
 
-- [ ] Tile streaming for any tiled tier, tiles chosen from the footprint:
-      `useTileStreaming` and `selectActive` hard-code `'r8'`, the store has a single
-      `r8Data`, and `lib/tiles.ts` picks tiles with a `gridDisk` whose radius is
-      `halfSpanDeg / parentEdgeDeg` — and that table is ~6× too large (r3 listed as 3.4°;
-      the real mean edge is 59.8 km ≈ 0.54°), so the disk is too small on a wide canvas (at
-      zoom 8 a 1920×1080 screen spans about ±2.6° × ±1.5° at the equator; k = 1 reaches
-      ~1.4°). Generalize: one `TileStream` per tiled manifest entry with its own cache and
-      retry state, merged data per tier in the store, and a selection that walks from the
-      wanted tier down to the finest tier that has data, so the tier already on screen
-      keeps drawing while the next one's tiles load. Tiles = the parent cells (at the
-      entry's `tileParentRes`) that intersect the footprint, plus the prefetch ring.
-      While in the render harness: it now seeds the first-run cue as already seen, so
-      `FirstRunCue` is never mounted under the gate and an error in it would go unnoticed —
-      mount it once and dismiss it through its own button before the first capture.
-      Accept: unit tests prove (a) for 1280×800, 1920×1080 and 375×812 at zoom 8–10 and
-      lat 0 / 45 / 70, every r3 parent whose cell overlaps the canvas footprint is
-      selected, and the visible set plus the prefetch ring fits the 64-tile cache; (b) the
-      same code selects r2 parents for an entry declaring `tileParentRes: 2`; (c) with the
-      wanted tiled tier still loading, the previously drawn tier is the one selected, and
-      a cold deep-link falls back to the finest tier that is loaded; (d) the existing
-      tile-stream tests pass; (e) headless `tile_fail.mjs` passes in both modes, and at a
-      1920×1080 r8 view the gate screenshot shows columns to the screen edges.
-      Gate: verify, qa:render.
 - [ ] r7 tier, tiled by r2 parents: between r6 and r8 a cell otherwise grows from 3 px to
       21 px before the 49× jump to r8. Pipeline (`pipeline/build_parents.py`): aggregate the
       committed r8 tiles to their r7 parents (same vectorized method and schema as r5),
@@ -101,7 +78,9 @@ something outside the session.
       what is kept past the cap a function of the key alone. The bench's current offenders
       are listed in the cull item's Done note. Since selection now depends on the canvas,
       a window drag must not re-select and re-cull on every resize frame (today each one
-      re-culls and re-tessellates): quantize or debounce the canvas size.
+      re-culls and re-tessellates): quantize or debounce the canvas size. A very wide
+      canvas (2560×1080) also puts more tiles on screen than the 64-tile cache holds at a
+      tiled tier's entry zoom (62–77); canvas-aware bands should bring that back under.
       The manifest's zoom bands stay as the nominal (equator, 3 px) values and a test pins
       them to the model. Also load a whole tier only when it is wanted or about to be —
       today every whole tier below the zoom is fetched, so a deep-link to zoom 9 would
@@ -659,3 +638,67 @@ something outside the session.
       to 12.6 ms at its entry views (was 1.4) because it now selects 120 k cells where the
       old window took 25 k; (6) the first-run cue is no longer mounted during render QA.
       Not verified: frame cost of the extra cells on a real GPU.)*
+- [x] Tile streaming for any tiled tier, tiles chosen from the footprint:
+      `useTileStreaming` and `selectActive` hard-code `'r8'`, the store has a single
+      `r8Data`, and `lib/tiles.ts` picks tiles with a `gridDisk` whose radius is
+      `halfSpanDeg / parentEdgeDeg` — and that table is ~6× too large (r3 listed as 3.4°;
+      the real mean edge is 59.8 km ≈ 0.54°), so the disk is too small on a wide canvas (at
+      zoom 8 a 1920×1080 screen spans about ±2.6° × ±1.5° at the equator; k = 1 reaches
+      ~1.4°). Generalize: one `TileStream` per tiled manifest entry with its own cache and
+      retry state, merged data per tier in the store, and a selection that walks from the
+      wanted tier down to the finest tier that has data, so the tier already on screen
+      keeps drawing while the next one's tiles load. Tiles = the parent cells (at the
+      entry's `tileParentRes`) that intersect the footprint, plus the prefetch ring.
+      While in the render harness: it now seeds the first-run cue as already seen, so
+      `FirstRunCue` is never mounted under the gate and an error in it would go unnoticed —
+      mount it once and dismiss it through its own button before the first capture.
+      Accept: unit tests prove (a) for 1280×800, 1920×1080 and 375×812 at zoom 8–10 and
+      lat 0 / 45 / 70, every r3 parent whose cell overlaps the canvas footprint is
+      selected, and the visible set plus the prefetch ring fits the 64-tile cache; (b) the
+      same code selects r2 parents for an entry declaring `tileParentRes: 2`; (c) with the
+      wanted tiled tier still loading, the previously drawn tier is the one selected, and
+      a cold deep-link falls back to the finest tier that is loaded; (d) the existing
+      tile-stream tests pass; (e) headless `tile_fail.mjs` passes in both modes, and at a
+      1920×1080 r8 view the gate screenshot shows columns to the screen edges.
+      Gate: verify, qa:render.
+      *(Done 2026-11-18, factory tick 10, Option A step 3. Tiles are now the parents whose
+      cells overlap the cull's own window for the cull's own re-selection key
+      (`selectParents` in `src/lib/tiles.ts`: a flood fill over neighbours, each cell's
+      edge arcs tested exactly against the window's planes), so "visible" means one thing
+      across the render path and every view sharing a key has its tiles. Each tiled
+      manifest entry gets its own stream, cache and timers (`useTileStreaming`); the store
+      holds `tiles: Record<lod, TileSet>` instead of a single `r8Data`; `selectActive`
+      walks from the wanted tier down to the finest tier that has data for THIS view, so
+      the tier on screen keeps drawing while the next one's tiles load and a pan never
+      shows another view's tiles as this one's. Nothing in `src/` names a tier any more.
+      Two send-backs, one per oracle (the contract was amended to allow exactly that —
+      `c442c5a5`): the gate went red on the new first-run-cue step in the render harness (a
+      wall-clock wait that the software rasterizer outlasted; it now waits on the app
+      state that makes the cue due), and the first checker FAILed Accept (a) with
+      counterexamples — the overlap test sampled each cell boundary at a few points, so on
+      a small ground footprint (narrow canvas, zoom 9.5–10, high latitude; Svalbard on a
+      phone) an on-screen tile could be skipped: 149 misses in 20,000 random views.
+      Evidence after the fix: a fresh checker's own deck.gl oracle found 0 missed parents
+      in 63,140 structured r3 views (5 canvases incl. 320×568 and 2560×1080, 25 latitudes
+      to the 85.05° clamp, antimeridian, pentagons, same-key neighbours), 24,000 random r3
+      views, 30,570 structured and 6,000 random r2 views, and the earlier checker's own
+      20,000-view sweep; the overlap test matched a brute force on 30,704 (cell, window)
+      pairs with 0 false negatives and 0 false positives. The old disk loaded 7 of the 20
+      r3 parents on screen at zoom 8 on 1920×1080. Visible / kept tiles at zoom 8: 12 / 29
+      (375×812), 29 / 51 (1280×800), 51 / 64 (1920×1080, prefetch ring cut to fit). 223
+      unit tests; the 25 original tile-stream tests unmodified. Render gate green: r8 at
+      zoom 9 draws 50,972 cells on 900×560 (38,298 before), 0 console errors, the cue
+      mounted and dismissed through its own button. Seen by the orchestrator at 1920×1080
+      over Delhi, zoom 8.05: r8 hexagons to every screen edge, 28 parents, 371,827 merged
+      cells. Headless `tile_fail.mjs` re-run by the orchestrator on the final tree: PASS in
+      default mode (22,564 cells with the Tokyo tile aborted), `--fail-times 1` (36,150
+      after recovery) and `--fail-worker`.
+      Known: at that Delhi view 120,000 of the on-screen cells are drawn — the cap binds
+      on a 1920×1080 canvas at r8's entry zoom, visibly, as speckle where low-density
+      cells are dropped (the selection item); on 2560×1080 the visible set alone exceeds
+      the 64-tile cache at r8's and r2's entry zooms (62–77 tiles; protected from
+      eviction, nothing drawn wrong); off its own key the "tiles cover this view" check
+      samples the canvas border every 16 px; a 1280 px pan at zoom 8 over a dense area
+      costs 7–9 merges and ~50–60 MB of allocation. Not verified: the r7 + r8 two-stream
+      path in a browser (no r7 data yet — unit-tested on a synthetic manifest), and
+      pan smoothness on a real GPU.)*

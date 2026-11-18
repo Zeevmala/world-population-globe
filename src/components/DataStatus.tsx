@@ -8,14 +8,15 @@ function cellLabel(km: number): string {
 
 /**
  * Background-load feedback for the tiers that arrive *after* first paint: crossing into
- * the `r5` / `mid` bands pulls a 6 / 31 MB Parquet and crossing into `r8` streams tiles — both of
+ * the `r5` / `mid` bands pulls a 6 / 31 MB Parquet and crossing into a tiled band streams tiles — both of
  * which used to happen in total silence. Everything here is derived from real store
  * state (manifest + what's actually decoded), so it can't claim progress that isn't real.
  */
 export function DataStatus() {
   const manifest = useGlobeStore((s) => s.manifest)
   const data = useGlobeStore((s) => s.data)
-  const r8Data = useGlobeStore((s) => s.r8Data)
+  const tiles = useGlobeStore((s) => s.tiles)
+  const activeLod = useGlobeStore((s) => s.activeLod)
   const status = useGlobeStore((s) => s.status)
   // Primitive selector: no re-render on rotation, only when the zoom actually moves.
   const zoom = useGlobeStore((s) => s.viewState.zoom)
@@ -30,9 +31,11 @@ export function DataStatus() {
   // skipped (a cold deep link past it) is never reported as loading.
   const want = wholeTierFor(zoom, manifest)
   const pendingWhole = want && !data[want.lod] ? want : undefined
-  // The tiled tier, entered but with nothing merged yet (first r8 viewport).
+  // The tiled tier whose band is reached, not on screen yet, and still fetching tiles for
+  // this view — not one that settled with nothing to draw (open ocean) or whose index failed.
+  const tileSet = active.tiled ? tiles[active.lod] : undefined
   const pendingTiles =
-    active.tiled && (!r8Data || r8Data.h3.length === 0) ? active : undefined
+    active.tiled && activeLod !== active.lod && (!tileSet || tileSet.status === 'loading') ? active : undefined
 
   const pending = pendingWhole ?? pendingTiles
   const message = pendingWhole

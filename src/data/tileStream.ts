@@ -2,7 +2,7 @@ import { concatPacked, h3Column } from './h3Column'
 import type { LodData, TileIndex } from '../types'
 
 /**
- * The r8 tile bookkeeping behind `useTileStreaming`, kept free of React, the DOM and
+ * The tile bookkeeping of one tiled tier behind `useTileStreaming`, kept free of React, the DOM and
  * the decode worker (the loader is injected) so Node can test it: tile selection,
  * LRU eviction, in-flight dedupe, the merge, and bounded retry of failed tiles.
  *
@@ -113,8 +113,13 @@ export function evictLru(
   }
 }
 
-/** Concatenate the cached tiles `parents` (all resident) into one columnar r8 tier. */
-export function mergeTiles(parents: readonly string[], cache: ReadonlyMap<string, TileCols>, idx: TileIndex): LodData {
+/** Concatenate the cached tiles `parents` (all resident) into one columnar tier named `lod`. */
+export function mergeTiles(
+  parents: readonly string[],
+  cache: ReadonlyMap<string, TileCols>,
+  idx: TileIndex,
+  lod: string,
+): LodData {
   let total = 0
   for (const p of parents) total += cache.get(p)!.population.length
   const population = new Float32Array(total)
@@ -132,7 +137,7 @@ export function mergeTiles(parents: readonly string[], cache: ReadonlyMap<string
   // time, on the main thread, on every view-key change.
   const h3 = h3Column(concatPacked(parents.map((p) => cache.get(p)!.h3), total))
   return {
-    lod: 'r8',
+    lod,
     h3Res: idx.h3Res,
     approxKm: idx.approxKm,
     h3,
@@ -143,12 +148,38 @@ export function mergeTiles(parents: readonly string[], cache: ReadonlyMap<string
   }
 }
 
+/**
+ * Whether a view whose resident visible tiles are `loaded` needs a new merge, given the
+ * parents of the merge being drawn (`published`; null if none): yes if a loaded tile is
+ * missing from it, or if it holds more than twice as many tiles (a zoom-in shrank the
+ * set: drop the cells no view on this key can show). Otherwise the drawn merge is a
+ * superset and is kept — a pan back and forth across a parent boundary, or a zoom-in by a
+ * step, re-merges nothing. Every merge is a new tier object, which the cull then pays
+ * 12 B/cell of unit vectors for (`lod.ts`), so merging only when the set really grows or
+ * halves is what bounds that churn.
+ */
+export function needsMerge(published: readonly string[] | null, loaded: readonly string[]): boolean {
+  if (!published) return true
+  if (published.length > 2 * loaded.length) return true
+  const have = new Set(published)
+  return loaded.some((p) => !have.has(p))
+}
+
 /** Outcome of one visible-set load. */
 export interface VisibleLoad {
-  /** The merged tier of every visible tile that is resident; null if none is. */
+  /**
+   * The merged tier of every visible tile that is resident; null if none is, or if the
+   * merge was skipped (`merged: false`).
+   */
   data: LodData | null
-  /** Parents merged into `data`, in merge order. */
+  /** The visible parents that are resident, in merge order. */
   loaded: string[]
+  /**
+   * False when the caller's published merge (`loadVisible`'s `published`) already holds
+   * every loaded tile and is not more than twice their number ({@link needsMerge}), so
+   * no new tier was built: the caller keeps drawing what it has.
+   */
+  merged: boolean
   /** Parents that failed this time and are still within their burst budget. */
   failed: string[]
   /**
@@ -159,6 +190,8 @@ export interface VisibleLoad {
 }
 
 export interface TileStreamOptions {
+  /** Tier name the merged data carries (the manifest entry's `lod`); default `r<h3Res>`. */
+  lod?: string
   maxTiles?: number
   maxAttempts?: number
   cooldownMs?: number
@@ -172,6 +205,7 @@ export interface TileStreamOptions {
  * Lives as long as the hook that owns it; the loader does the network + decode.
  */
 export class TileStream {
+  readonly lod: string
   readonly idx: TileIndex
   readonly files: Map<string, string>
   readonly cache = new Map<string, TileCols>()
@@ -188,6 +222,7 @@ export class TileStream {
 
   constructor(idx: TileIndex, load: LoadTile, opts: TileStreamOptions = {}) {
     this.idx = idx
+    this.lod = opts.lod ?? `r${idx.h3Res}`
     this.load = load
     this.files = tileFiles(idx)
     this.maxTiles = opts.maxTiles ?? TILE_CACHE_MAX
@@ -240,7 +275,7 @@ export class TileStream {
           // follow-up attempts of the same burst stay quiet.
           if (n === 1) {
             this.warn(
-              `r8 tile ${p} failed to load; retrying up to ${this.maxAttempts} attempts, then again after ${this.cooldownMs / 1000} s`,
+              `${this.lod} tile ${p} failed to load; retrying up to ${this.maxAttempts} attempts, then again after ${this.cooldownMs / 1000} s`,
               err,
             )
           }
@@ -271,8 +306,12 @@ export class TileStream {
     evictLru(this.cache, { has: (k) => visible.has(k) || protect.has(k) }, this.maxTiles)
   }
 
-  /** Load the visible `candidates` and merge whatever loaded — never rejects. */
-  async loadVisible(candidates: readonly string[]): Promise<VisibleLoad> {
+  /**
+   * Load the visible `candidates` and merge whatever loaded — never rejects. With
+   * `published` (the parents of the merge the caller is drawing), the merge is skipped
+   * when that one will do ({@link needsMerge}).
+   */
+  async loadVisible(candidates: readonly string[], published?: readonly string[] | null): Promise<VisibleLoad> {
     const wanted = this.select(candidates)
     // This call is now the current view: every later eviction protects its set, and
     // its own loads add no protection of their own (once a newer view takes over they
@@ -297,9 +336,11 @@ export class TileStream {
         retryInMs = retryInMs === null ? wait : Math.min(retryInMs, wait)
       }
     }
+    const merged = published === undefined || needsMerge(published, loaded)
     return {
-      data: loaded.length ? mergeTiles(loaded, this.cache, this.idx) : null,
+      data: merged && loaded.length ? mergeTiles(loaded, this.cache, this.idx, this.lod) : null,
       loaded,
+      merged,
       failed,
       retryInMs,
     }

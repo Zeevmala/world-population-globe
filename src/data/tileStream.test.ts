@@ -5,6 +5,7 @@ import {
   TILE_RETRY_COOLDOWN_MS,
   TileStream,
   evictLru,
+  needsMerge,
   retryDelayMs,
   selectTiles,
   tileEligible,
@@ -463,5 +464,57 @@ describe('TileStream — a stale run never evicts the current view', () => {
     expect(c.loaded).toEqual(viewC)
     expect(stream.cache.size).toBe(M)
     expect([...stream.cache.keys()]).toEqual(viewC)
+  })
+})
+
+describe('TileStream — one stream per tiled tier, merging only when the drawn set will not do', () => {
+  it('names its merged tier and its warnings after the manifest entry it streams', async () => {
+    const warn = vi.fn()
+    const load = vi.fn<LoadTile>(async (file) => {
+      if (file === 'f1.parquet') throw new Error('boom')
+      return tile(0, 3)
+    })
+    const stream = new TileStream({ ...index(2), parentRes: 2, h3Res: 7 }, load, { lod: 'r7', warn, now: () => 0 })
+    expect(stream.parentRes).toBe(2)
+    const r = await stream.loadVisible([parent(0), parent(1)])
+    expect(r.data!.lod).toBe('r7')
+    expect(r.data!.h3Res).toBe(7)
+    expect(warn.mock.calls[0][0]).toMatch(/^r7 tile p1 failed/)
+    // Without a name, the tier is named by its resolution.
+    expect(new TileStream(index(1), load).lod).toBe('r8')
+  })
+
+  it('open ocean: candidates absent from the index cost no request, no merge and no retry', async () => {
+    const { stream, load } = harness(2)
+    const r = await stream.loadVisible(['ocean-a', 'ocean-b'])
+    expect(load).not.toHaveBeenCalled()
+    expect(r).toMatchObject({ data: null, loaded: [], failed: [], retryInMs: null })
+    await stream.prefetch(['ocean-c'], new Set())
+    expect(load).not.toHaveBeenCalled()
+  })
+
+  it('needsMerge: only when a loaded tile is missing from the drawn merge, or the merge is over twice the set', () => {
+    const ps = (...k: number[]) => k.map(parent)
+    expect(needsMerge(null, ps(0))).toBe(true)
+    expect(needsMerge(ps(0, 1), ps(0, 1, 2))).toBe(true) // a new tile
+    expect(needsMerge(ps(0, 1, 2), ps(0, 1))).toBe(false) // a pan back across a boundary
+    expect(needsMerge(ps(0, 1, 2), ps(1, 2))).toBe(false)
+    expect(needsMerge(ps(0, 1, 2, 3, 4), ps(1, 2))).toBe(true) // zoomed in: 5 > 2 × 2
+    expect(needsMerge(ps(0), [])).toBe(true) // nothing left to draw
+    expect(needsMerge([], [])).toBe(false)
+  })
+
+  it('loadVisible skips the merge when the drawn one covers it, and merges when it does not', async () => {
+    const { stream } = harness(4)
+    const first = await stream.loadVisible([parent(0), parent(1), parent(2)], null)
+    expect(first.merged).toBe(true)
+    expect(first.data!.h3.length).toBe(3 + 4 + 5)
+    const same = await stream.loadVisible([parent(1), parent(2)], first.loaded)
+    expect(same).toMatchObject({ merged: false, data: null, loaded: [parent(1), parent(2)] })
+    const grown = await stream.loadVisible([parent(2), parent(3)], first.loaded)
+    expect(grown.merged).toBe(true)
+    expect(grown.loaded).toEqual([parent(2), parent(3)])
+    // Without `published` (the old call), it always merges.
+    expect((await stream.loadVisible([parent(1)])).merged).toBe(true)
   })
 })

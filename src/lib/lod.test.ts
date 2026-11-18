@@ -1,13 +1,28 @@
 import { describe, expect, it } from 'vitest'
 import { _GlobeViewport as GlobeViewport } from '@deck.gl/core'
 import { cullForView, cullKeyFor, cullWindowCells, pickLod, selectActive } from './lod'
+import type { TileCoverage } from './lod'
 import { MAX_LATITUDE, ZOOM_STEP, cullBucket, cullWindow } from './footprint'
 import type { Canvas } from './footprint'
 import { MANIFEST, makeLod, rng } from '../test/fixtures'
 import { CAP, DEG, LOCAL, RealProjection, checkCoverage, localTier, view } from '../test/cullHarness'
-import type { GlobeViewState, LodData } from '../types'
+import type { GlobeViewState, LodData, TileSet } from '../types'
 
 const tiny = (lod: string, h3Res: number): LodData => makeLod(lod, h3Res, 1, () => [0, 0, 1])
+
+/** A published tile set holding `data` (coverage is decided by the `covers` passed to `selectActive`). */
+const tileSet = (data: LodData | null, extra: Partial<TileSet> = {}): TileSet => ({
+  lod: 'r8',
+  parentRes: 3,
+  status: 'ready',
+  key: 'k',
+  settled: new Set(),
+  data,
+  parents: [],
+  ...extra,
+})
+const COVERS: TileCoverage = () => true
+const SEL_CANVAS = { width: 1280, height: 800 }
 
 describe('pickLod', () => {
   const loaded = { overview: tiny('overview', 4), r5: tiny('r5', 5), mid: tiny('mid', 6) }
@@ -50,7 +65,7 @@ describe('the shipped band table', () => {
   const loaded = { overview: tiny('overview', 4), r5: tiny('r5', 5), mid: tiny('mid', 6) }
   const r8 = tiny('r8', 8)
   const tierAt = (zoom: number, active?: string) =>
-    selectActive(view(139.7, 35.68, zoom), MANIFEST, loaded, r8, active).entry?.lod
+    selectActive(view(139.7, 35.68, zoom), SEL_CANVAS, MANIFEST, loaded, { r8: tileSet(r8) }, active, COVERS).entry?.lod
 
   it('is overview → r5 → mid → r8, each band starting where the last ends', () => {
     expect(MANIFEST.lods.map((l) => [l.lod, l.h3Res])).toEqual([
@@ -90,21 +105,22 @@ describe('selectActive', () => {
   const r8 = tiny('r8', 8)
 
   it('prefers streamed r8 once its band is reached and tiles are merged', () => {
-    expect(selectActive(view(0, 0, 8.5), MANIFEST, loaded, r8).entry?.lod).toBe('r8')
+    expect(selectActive(view(0, 0, 8.5), SEL_CANVAS, MANIFEST, loaded, { r8: tileSet(r8) }, null, COVERS).entry?.lod).toBe('r8')
   })
 
   it('falls back to the finest whole tier while r8 has no cells', () => {
-    expect(selectActive(view(0, 0, 8.5), MANIFEST, loaded, null).entry?.lod).toBe('mid')
+    expect(selectActive(view(0, 0, 8.5), SEL_CANVAS, MANIFEST, loaded, {}, null, COVERS).entry?.lod).toBe('mid')
+    expect(selectActive(view(0, 0, 8.5), SEL_CANVAS, MANIFEST, loaded, { r8: tileSet(null) }, null, COVERS).entry?.lod).toBe('mid')
     const empty = makeLod('r8', 8, 0, () => [0, 0, 0])
-    expect(selectActive(view(0, 0, 8.5), MANIFEST, loaded, empty).entry?.lod).toBe('mid')
+    expect(selectActive(view(0, 0, 8.5), SEL_CANVAS, MANIFEST, loaded, { r8: tileSet(empty) }, null, COVERS).entry?.lod).toBe('mid')
   })
 
   it('never shows r8 below its band, even with tiles merged', () => {
-    expect(selectActive(view(0, 0, 6), MANIFEST, loaded, r8).entry?.lod).toBe('mid')
+    expect(selectActive(view(0, 0, 6), SEL_CANVAS, MANIFEST, loaded, { r8: tileSet(r8) }, null, COVERS).entry?.lod).toBe('mid')
   })
 
   it('returns the data that belongs to the chosen entry', () => {
-    const { entry, data } = selectActive(view(0, 0, 4.5), MANIFEST, loaded, null)
+    const { entry, data } = selectActive(view(0, 0, 4.5), SEL_CANVAS, MANIFEST, loaded, {}, null, COVERS)
     expect(entry?.lod).toBe('r5')
     expect(data).toBe(loaded.r5)
   })

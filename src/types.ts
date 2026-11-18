@@ -39,6 +39,34 @@ export interface TileIndex {
   tiles: TileRef[]
 }
 
+/**
+ * What a tiled tier's stream has published for the view it last served
+ * (`useTileStreaming`; one per tiled manifest entry, in the store's `tiles` by tier name).
+ */
+export interface TileSet {
+  lod: string
+  /** H3 resolution of the tier's parent tiles (the index's `parentRes`). */
+  parentRes: number
+  /**
+   * `loading`: the tier is in its band and the stream is fetching the tiles of a newer
+   * key than `key`. `ready`: the load for `key` has settled. `failed`: the tile index
+   * could not be loaded (retried after a cool-down) — the tier has nothing to draw.
+   */
+  status: 'loading' | 'ready' | 'failed'
+  /** Re-selection key (`lib/tiles.ts` `tileKey`) whose load has settled; '' before the first. */
+  key: string
+  /**
+   * Parents whose outcome for `key` is known — loaded, absent from the index (ocean), or
+   * failed and being retried: the key's whole visible set. Coverage is judged on this,
+   * not on `data`, so an ocean parent or a failed tile does not keep the tier off screen.
+   */
+  settled: ReadonlySet<string>
+  /** The merged cells (may hold more parents than `key` needs; never fewer). Null if none. */
+  data: LodData | null
+  /** Parents merged into `data`. */
+  parents: readonly string[]
+}
+
 /** Top-level data manifest describing all baked LOD tiers + provenance. */
 export interface Manifest {
   source: string
