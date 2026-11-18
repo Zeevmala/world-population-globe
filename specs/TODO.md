@@ -45,9 +45,14 @@ cull-window, tile-selection, popping and cross-fade work waits there for it.
 - [ ] Night-lights basemap toggle: swap the dark-ocean sphere texture for NASA Black Marble
       (public domain) behind a `Controls.tsx` toggle; columns must stay legible
       (data > basemap).
-      Waiting on the user (2026-11-17): the texture host (`eoimages.gsfc.nasa.gov`) is
-      refused by the cloud environment's network policy (proxy 403) — it needs that host
-      allowed, or the texture supplied in the repo.
+      Waiting on the user (2026-11-18): the texture could not be fetched from the cloud
+      session. `eoimages.gsfc.nasa.gov` was allowed for the environment but its server
+      never completes a TLS handshake from that network (5 attempts, each closed after
+      14 s), so it was swapped for NASA's GIBS map service (`gibs.earthdata.nasa.gov`,
+      which serves the same Black Marble imagery over WMS) — and the download command
+      itself was then refused by the session's permission classifier. Either commit the
+      texture (an equirectangular Black Marble JPEG, ≤ 2 MB, e.g. 2048×1024) under
+      `public/` and say where it came from, or permit the download.
       Accept: toggle works both ways at overview and r8 zoom; attribution line updated;
       the texture is < 2 MB and lazy-loaded (not in the first-paint path); 0 console errors.
       Gate: verify, qa:render.

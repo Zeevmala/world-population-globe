@@ -388,7 +388,7 @@ that is valid either way.
 - No schedule was registered: a recurring task spends tokens unattended, and whether the
   missing Routine was removed on purpose is not something the repo can answer.
 - Left in the queue, each waiting on something outside the session: the night-lights
-  basemap (its texture host is refused by the cloud environment's network policy) and the
+  basemap (its texture could not be downloaded from the cloud session — see the item) and the
   render gate in CI (its Accept needs a GitHub Actions run, which needs a pull request —
   the same PR would be the first Actions run of the `verify` + `verify:data` steps this
   sprint added to CI and to the deploy workflow, which are unverified there until then).
