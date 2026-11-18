@@ -179,14 +179,16 @@ function bandMiddle(lod) {
 /**
  * The run plan, ordered so each tier crossing is measured COLD — before any
  * sample has warmed that tier's data. Crossing into r5 pays the 6 MB r5 parse, into
- * mid the 31 MB mid parse, into r8 the first tile burst. Sampling those zooms first
- * would hide exactly the stall we are hunting.
+ * mid the 31 MB mid parse, into r7 the first r2-tile burst, into r8 the first r3-tile
+ * burst while r7 is on screen. Sampling those zooms first would hide exactly the stall
+ * we are hunting.
  *
- * --quick (the gate's plan) is six steps: the hero, the three cold crossings (whose
- * settled far side is checked against the cell cap — the widest, most cell-heavy
- * window each tier gets), and a sample inside the mid and the r8 bands. Every tier is
- * reached once. The full plan adds a sample in every band, the deep end of the zoom
- * range, a second metro and an empty ocean.
+ * --quick (the gate's plan) is one cold crossing per tier threshold (whose settled far
+ * side is checked against the cell cap — the widest, most cell-heavy window each tier
+ * gets) plus the hero and a sample inside each of the two finest bands: with today's
+ * five tiers, seven steps — hero, → r5, → mid, → r7, r7 sample, → r8, r8 sample. Every
+ * tier is reached once. The full plan adds a sample in every band, the deep end of the
+ * zoom range, a second metro and an empty ocean.
  */
 function buildPlan(quick) {
   const tokyo = crossingsFor('tokyo')

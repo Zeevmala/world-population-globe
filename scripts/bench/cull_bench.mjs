@@ -11,7 +11,7 @@
  * as Float32Array exactly like `decode.worker.ts`, then times each view REPEATS times after a
  * warm-up and prints the median (and min) per view. The views sit where each tier is
  * actually on screen since the re-band: r5 from 3.63 (its 3.78 entry less the hysteresis)
- * to 5.18, mid from 5.03 to 7.99 — the entry zooms are where a cull window is widest and
+ * to 5.18, mid from 5.03 to 6.59 — the entry zooms are where a cull window is widest and
  * the cull most expensive. Canvas 1280×800.
  *
  * Usage: node scripts/bench/cull_bench.mjs [--repeats=N]

@@ -16,9 +16,17 @@
  *     r5 cell is the H3 parent of at least one mid cell, every mid cell's parent is in
  *     r5, each r5 population == the exact sum of its mid children, and each r5 lng/lat
  *     is its H3 cell center (h3-js — independent of the pipeline's bit arithmetic).
- *   - r8 pyramid: index.json == manifest, every listed tile exists, no orphan
- *     tiles on disk, Σ cellCount == 32,957,699, Σpop == 8,031,924,024, and every
- *     tile's cells really live under its declared H3 r3 parent.
+ *   - every tiled pyramid (r7 by r2 parent, r8 by r3 parent — whatever the manifest lists
+ *     with `tiled: true`): index.json == manifest, every listed tile exists under
+ *     `parent=<its parent>/`, no orphan tiles on disk, Σ cellCount == 9,012,014 /
+ *     32,957,699, Σpop == 8,031,924,024, and every tile's cells really live under its
+ *     declared H3 parent.
+ *   - r7 (the parent roll-up of r8, `pipeline/build_parents.py`), checked tile group by
+ *     tile group during the r8 pass: every r8 cell's r7 parent (h3-js) is a row of the r7
+ *     tile of its r2 ancestor, every r7 cell has ≥ 1 r8 child, each r7 population ==
+ *     the exact Σ of its r8 children, each r7 cell sits in the tile of its r2 parent,
+ *     each r7 lng/lat is its H3 cell center — and, as a by-product, every r8 cell lies
+ *     under its tile's r3 parent (not just the sampled ones).
  *   - every file under public/data/** < 100 MB (GitHub Pages hard limit).
  *
  * Usage: node scripts/verify_data.mjs [--sample[=N]] [--concurrency=N] [--public=DIR]
@@ -39,7 +47,7 @@ const PUBLIC = publicArg ? path.resolve(publicArg.slice('--public='.length)) : p
 const DATA = path.join(PUBLIC, 'data')
 
 /** Exact per-tier population totals baked by the pipeline (people). */
-const EXPECTED_SUM = { overview: 8031924025, r5: 8031924024, mid: 8031924024, r8: 8031924024 }
+const EXPECTED_SUM = { overview: 8031924025, r5: 8031924024, mid: 8031924024, r7: 8031924024, r8: 8031924024 }
 /** Whole-file tiers, coarse → fine. */
 const WHOLE_TIERS = ['overview', 'r5', 'mid']
 const EXPECTED_R5_CELLS = 393791
@@ -50,8 +58,17 @@ const WORLD_POP = 8.031924e9
 const WORLD_TOL = 5e6
 /** GitHub blob hard limit — a committed file at or above this cannot be pushed. */
 const MAX_FILE_BYTES = 100 * 1024 * 1024
-const EXPECTED_R8_CELLS = 32957699
-const EXPECTED_R8_TILES = 12761
+/** Tiled tiers: exact cell and tile counts, and the H3 resolution of the tile parents. */
+const EXPECTED_TILED = {
+  r7: { cells: 9012014, tiles: 2409, parentRes: 2 },
+  r8: { cells: 32957699, tiles: 12761, parentRes: 3 },
+}
+/**
+ * Tiled tiers that are the H3-parent roll-up of a finer tiled tier (parent → child),
+ * as `pipeline/build_parents.py` derives them. The whole-file r5 ↔ mid roll-up is
+ * checked separately below.
+ */
+const TILED_ROLLUPS = { r7: 'r8' }
 /** Minimum tiles read whole in --sample mode (the brief's floor). */
 const MIN_SAMPLE_TILES = 500
 /** Tiles whose every cell gets an H3-parent check (the mis-partition detector). */
@@ -172,7 +189,7 @@ function scanH3(h3, res) {
 // ------------------------------------------------------------------ manifest
 
 console.log(`verify_data: ${DATA}`)
-console.log(`MODE: ${SAMPLE_MODE ? `SAMPLE (${SAMPLE_N} tiles read whole)` : 'FULL (every r8 tile read whole)'}`)
+console.log(`MODE: ${SAMPLE_MODE ? `SAMPLE (${SAMPLE_N} tiles read whole)` : 'FULL (every tile of every tiled tier read whole)'}`)
 console.log('')
 
 let manifest
@@ -195,7 +212,7 @@ check('manifest license is CC-BY 4.0', manifest.license === 'CC-BY 4.0', `licens
 check('manifest crs is EPSG:4326 (client centroids)', manifest.crs === 'EPSG:4326', `crs="${manifest.crs}"`)
 
 const byLod = Object.fromEntries(manifest.lods.map((e) => [e.lod, e]))
-check('manifest has overview/r5/mid/r8', [...WHOLE_TIERS, 'r8'].every((l) => byLod[l]), Object.keys(byLod).join(','))
+check('manifest has overview/r5/mid/r7/r8', [...WHOLE_TIERS, ...Object.keys(EXPECTED_TILED)].every((l) => byLod[l]), Object.keys(byLod).join(','))
 check(
   'manifest tiers ordered coarse → fine with contiguous bands',
   manifest.lods.every((e, i, a) => i === 0 || (e.h3Res > a[i - 1].h3Res && e.minZoom === a[i - 1].maxZoom)),
@@ -335,35 +352,206 @@ for (const lod of WHOLE_TIERS) {
   }
 }
 
-// ------------------------------------------------------------- r8 pyramid
+// ------------------------------------------------------------ tiled pyramids
 
-const r8 = byLod.r8
-let idx = null
-if (r8) {
-  const idxPath = path.join(PUBLIC, r8.indexFile)
+/** Per-tile shape of a tiled tier's index.json (`TileIndex` in src/types.ts). */
+const IDX_KEYS = ['parentRes', 'h3Res', 'approxKm', 'tileCount', 'cellCount', 'maxPopulation', 'sumPopulation', 'tiles']
+
+async function readIndex(e) {
   try {
-    idx = JSON.parse(await readFile(idxPath, 'utf8'))
-    check('r8: index.json parses', true, r8.indexFile)
+    const idx = JSON.parse(await readFile(path.join(PUBLIC, e.indexFile), 'utf8'))
+    check(`${e.lod}: index.json parses`, true, e.indexFile)
+    return idx
   } catch (err) {
-    check('r8: index.json parses', false, err.message)
+    check(`${e.lod}: index.json parses`, false, err.message)
+    return null
   }
 }
 
-if (idx) {
-  const IDX_KEYS = ['parentRes', 'h3Res', 'approxKm', 'tileCount', 'cellCount', 'maxPopulation', 'sumPopulation', 'tiles']
-  check('r8: TileIndex fields', IDX_KEYS.every((k) => idx[k] !== undefined), IDX_KEYS.filter((k) => idx[k] === undefined).join(',') || 'all present')
-  check('r8: every TileRef has parent/file/cellCount', idx.tiles.every((t) => typeof t.parent === 'string' && typeof t.file === 'string' && Number.isInteger(t.cellCount)))
-  check('r8: index tileCount == tiles.length', idx.tileCount === idx.tiles.length, `${n(idx.tileCount)} vs ${n(idx.tiles.length)}`)
-  check(`r8: tileCount == ${n(EXPECTED_R8_TILES)}`, idx.tiles.length === EXPECTED_R8_TILES, n(idx.tiles.length))
-  check('r8: index parentRes == manifest tileParentRes', idx.parentRes === r8.tileParentRes, `${idx.parentRes} vs ${r8.tileParentRes}`)
-  check('r8: index h3Res == manifest h3Res', idx.h3Res === r8.h3Res, `${idx.h3Res} vs ${r8.h3Res}`)
-  check('r8: index cellCount == manifest cellCount', idx.cellCount === r8.cellCount, `${n(idx.cellCount)} vs ${n(r8.cellCount)}`)
-  check('r8: index sumPopulation == manifest sumPopulation', idx.sumPopulation === r8.sumPopulation, `${n(idx.sumPopulation)} vs ${n(r8.sumPopulation)}`)
-  check('r8: unique parents', new Set(idx.tiles.map((t) => t.parent)).size === idx.tiles.length)
-  check('r8: every parent is a valid r3 H3 cell', idx.tiles.every((t) => isValidCell(t.parent) && getResolution(t.parent) === idx.parentRes))
+/**
+ * The children check of a tiled roll-up (r7 = Σ of r8 children, `build_parents.py`),
+ * run inside the CHILD tier's tile pass. The H3 hierarchy nests: every child tile (an r3
+ * cell) lies inside exactly one parent-tier tile (its r2 ancestor), so child tiles are
+ * summed into their parent tile's group and a group is compared — and dropped — as soon
+ * as its last child tile is in. Only the groups in flight are ever held (the index is
+ * sorted, so a group's tiles are adjacent), never 33 M strings or one giant Map.
+ *
+ * Per cell it uses h3-js `cellToParent` — independent of the pipeline's bit arithmetic.
+ */
+function tiledRollup(parent, parentIdx, child, childIdx) {
+  const pres = parentIdx.parentRes
+  const res = parent.h3Res
+  const parentTiles = new Map(parentIdx.tiles.map((t) => [t.parent, t]))
+  /** group (parent-tier tile) → child tiles not yet summed. */
+  const pending = new Map()
+  for (const t of childIdx.tiles) {
+    let g
+    try {
+      g = cellToParent(t.parent, pres)
+    } catch {
+      continue // not an H3 cell: the child tier's own index checks already fail it
+    }
+    pending.set(g, (pending.get(g) ?? 0) + 1)
+  }
+  /** group → (parent cell → Σ children so far). */
+  const groups = new Map()
+  const visited = new Set()
+  const s = {
+    childCells: 0,
+    misfiled: 0,
+    orphans: 0,
+    orphanEg: [],
+    missingTile: 0,
+    childless: 0,
+    mismatch: 0,
+    worst: { d: 0, h3: '' },
+    nonInteger: 0,
+    dupes: 0,
+    misplaced: 0,
+    centerOff: 0,
+    maxOff: 0,
+    rows: 0,
+    readErr: 0,
+    errs: [],
+  }
+
+  async function finalize(g, sums) {
+    visited.add(g)
+    const t = parentTiles.get(g)
+    if (!t) {
+      s.missingTile++
+      s.orphans += sums.size
+      if (s.orphanEg.length < 3) s.orphanEg.push(`no ${parent.lod} tile ${g}`)
+      return
+    }
+    let cols
+    try {
+      cols = await readCols(path.join(PUBLIC, t.file), ['h3', 'population', 'lng', 'lat'])
+    } catch (err) {
+      s.readErr++
+      if (s.errs.length < 3) s.errs.push(`${g}: ${err.message}`)
+      return
+    }
+    const seen = new Set()
+    for (let j = 0; j < cols.h3.length; j++) {
+      const h = cols.h3[j]
+      s.rows++
+      if (seen.has(h)) s.dupes++
+      seen.add(h)
+      if (cellToParent(h, pres) !== g) s.misplaced++
+      const p = cols.population[j]
+      if (!Number.isInteger(p)) s.nonInteger++
+      const sum = sums.get(h)
+      if (sum === undefined) {
+        s.childless++
+        continue
+      }
+      sums.delete(h)
+      // Every child population is a whole number and every parent sum is < 2^24, so the
+      // FLOAT column holds the sum exactly: compare with no tolerance.
+      if (p !== sum) {
+        s.mismatch++
+        if (Math.abs(p - sum) > s.worst.d) s.worst = { d: Math.abs(p - sum), h3: h }
+      }
+      const [la, ln] = cellToLatLng(h)
+      let dLng = Math.abs(ln - cols.lng[j])
+      if (dLng > 180) dLng = 360 - dLng
+      const off = Math.max(Math.abs(la - cols.lat[j]), dLng)
+      if (off > s.maxOff) s.maxOff = off
+      if (off > 1e-4) s.centerOff++
+    }
+    // Whatever is left has children but no row in the tile the hierarchy puts it in.
+    s.orphans += sums.size
+    for (const k of sums.keys()) {
+      if (s.orphanEg.length >= 3) break
+      s.orphanEg.push(`${k} (not in ${g})`)
+    }
+  }
+
+  return {
+    /** Called once per child tile read (FULL mode only — a group needs all its tiles). */
+    async onTile(t, cols) {
+      const g = cellToParent(t.parent, pres)
+      let sums = groups.get(g)
+      if (!sums) groups.set(g, (sums = new Map()))
+      const local = new Map()
+      for (let i = 0; i < cols.h3.length; i++) {
+        const p = cellToParent(cols.h3[i], res)
+        local.set(p, (local.get(p) ?? 0) + cols.population[i])
+      }
+      s.childCells += cols.h3.length
+      for (const [p, v] of local) {
+        // The child tier's partition, for every cell: its parent (and so the cell) lies
+        // under the tile's declared parent. One h3-js call per parent cell, not per child.
+        if (cellToParent(p, childIdx.parentRes) !== t.parent) s.misfiled++
+        sums.set(p, (sums.get(p) ?? 0) + v)
+      }
+      const left = pending.get(g) - 1
+      pending.set(g, left)
+      if (left === 0) {
+        groups.delete(g)
+        await finalize(g, sums)
+      }
+    },
+    finish(t0) {
+      const unread = [...pending.values()].filter((v) => v > 0).length
+      let childlessTiles = 0
+      for (const t of parentIdx.tiles) {
+        if (!visited.has(t.parent)) {
+          childlessTiles++
+          s.childless += t.cellCount
+        }
+      }
+      const P = parent.lod
+      const C = child.lod
+      check(`${P} ↔ ${C}: every ${C} tile group read`, unread === 0 && s.readErr === 0, `incomplete groups=${n(unread)}, ${P} read errors=${n(s.readErr)}${s.errs.length ? ' ' + s.errs.join(' | ') : ''}`)
+      check(`${P} ↔ ${C}: every ${C} cell lies under its tile's r${childIdx.parentRes} parent`, s.misfiled === 0, `misfiled ${P} parents=${n(s.misfiled)} over ${n(s.childCells)} ${C} cells`)
+      check(`${P} ↔ ${C}: every ${C} cell's r${res} parent is in the ${P} tile of its r${pres} ancestor`, s.orphans === 0 && s.missingTile === 0, `missing parents=${n(s.orphans)}, groups with no ${P} tile=${n(s.missingTile)}${s.orphanEg.length ? ' e.g. ' + s.orphanEg.join(', ') : ''}`)
+      check(`${P} ↔ ${C}: every ${P} cell is the parent of ≥ 1 ${C} cell`, s.childless === 0, `childless=${n(s.childless)} (${n(childlessTiles)} ${P} tiles with no ${C} tiles)`)
+      check(`${P} ↔ ${C}: every ${P} cell sits in the tile of its r${pres} parent`, s.misplaced === 0, `misplaced=${n(s.misplaced)} of ${n(s.rows)}`)
+      check(`${P}: no duplicate cells`, s.dupes === 0, `duplicates=${n(s.dupes)}`)
+      check(
+        `${P} ↔ ${C}: population == exact Σ of its ${C} children`,
+        s.mismatch === 0,
+        `mismatched=${n(s.mismatch)}${s.mismatch ? `, worst Δ=${n(s.worst.d)} at ${s.worst.h3}` : ''}`,
+      )
+      check(`${P}: every population is a whole number (float32-exact)`, s.nonInteger === 0, `non-integer=${n(s.nonInteger)}`)
+      check(`${P}: lng/lat == H3 cell center (EPSG:4326, lng first)`, s.centerOff === 0, `off by > 1e-4°: ${n(s.centerOff)}, max off ${s.maxOff.toExponential(2)}°`)
+      console.log(`      … ${P} ↔ ${C} roll-up over ${n(s.childCells)} cells, tile group by tile group, in ${((Date.now() - t0) / 1000).toFixed(1)}s`)
+    },
+  }
+}
+
+/** Index ↔ manifest, files on disk, and every (or a sample of) tile read whole. */
+async function verifyTiled(e, idx, rollup) {
+  const L = e.lod
+  const expected = EXPECTED_TILED[L]
+  check(`${L}: TileIndex fields`, IDX_KEYS.every((k) => idx[k] !== undefined), IDX_KEYS.filter((k) => idx[k] === undefined).join(',') || 'all present')
+  check(`${L}: every TileRef has parent/file/cellCount`, idx.tiles.every((t) => typeof t.parent === 'string' && typeof t.file === 'string' && Number.isInteger(t.cellCount)))
+  check(`${L}: index tileCount == tiles.length`, idx.tileCount === idx.tiles.length, `${n(idx.tileCount)} vs ${n(idx.tiles.length)}`)
+  if (expected) {
+    check(`${L}: tileCount == ${n(expected.tiles)}`, idx.tiles.length === expected.tiles, n(idx.tiles.length))
+    check(`${L}: tiles are r${expected.parentRes} parents`, idx.parentRes === expected.parentRes, `parentRes=${idx.parentRes}`)
+  } else check(`${L}: a tiled tier this gate knows`, false, `add ${L} to EXPECTED_TILED`)
+  check(`${L}: index parentRes == manifest tileParentRes`, idx.parentRes === e.tileParentRes, `${idx.parentRes} vs ${e.tileParentRes}`)
+  check(`${L}: index h3Res == manifest h3Res`, idx.h3Res === e.h3Res, `${idx.h3Res} vs ${e.h3Res}`)
+  check(`${L}: index cellCount == manifest cellCount`, idx.cellCount === e.cellCount, `${n(idx.cellCount)} vs ${n(e.cellCount)}`)
+  check(`${L}: index sumPopulation == manifest sumPopulation`, idx.sumPopulation === e.sumPopulation, `${n(idx.sumPopulation)} vs ${n(e.sumPopulation)}`)
+  check(`${L}: index maxPopulation == manifest maxPopulation`, idx.maxPopulation === e.maxPopulation, `${n(idx.maxPopulation)} vs ${n(e.maxPopulation)}`)
+  check(`${L}: unique parents`, new Set(idx.tiles.map((t) => t.parent)).size === idx.tiles.length)
+  check(`${L}: every parent is a valid r${idx.parentRes} H3 cell`, idx.tiles.every((t) => isValidCell(t.parent) && getResolution(t.parent) === idx.parentRes))
+  check(
+    `${L}: every tile file is parent=<its parent>/`,
+    idx.tiles.every((t) => t.file.startsWith(`${path.posix.dirname(e.indexFile)}/parent=${t.parent}/`)),
+    `under ${path.posix.dirname(e.indexFile)}/`,
+  )
 
   const sumDeclared = idx.tiles.reduce((a, t) => a + t.cellCount, 0)
-  check(`r8: Σ tile cellCount == ${n(EXPECTED_R8_CELLS)}`, sumDeclared === EXPECTED_R8_CELLS && sumDeclared === idx.cellCount, `Σ=${n(sumDeclared)} index=${n(idx.cellCount)}`)
+  check(
+    `${L}: Σ tile cellCount == ${expected ? n(expected.cells) : 'index cellCount'}`,
+    sumDeclared === idx.cellCount && (!expected || sumDeclared === expected.cells),
+    `Σ=${n(sumDeclared)} index=${n(idx.cellCount)}`,
+  )
 
   // -- existence over ALL tiles (both modes) ---------------------------------
   const sizes = new Array(idx.tiles.length).fill(0)
@@ -375,18 +563,20 @@ if (idx) {
       missing++
     }
   })
-  check('r8: every indexed tile file exists', missing === 0, `${n(idx.tiles.length - missing)}/${n(idx.tiles.length)} present, missing=${n(missing)}`)
+  check(`${L}: every indexed tile file exists`, missing === 0, `${n(idx.tiles.length - missing)}/${n(idx.tiles.length)} present, missing=${n(missing)}`)
 
   // -- no orphan tiles on disk (a partition the index forgot) ----------------
-  const dirents = await readdir(path.join(DATA, 'tiles', 'r8'), { withFileTypes: true })
+  const tileDir = path.join(PUBLIC, path.dirname(e.indexFile))
+  const dirents = await readdir(tileDir, { withFileTypes: true })
   const onDisk = new Set(dirents.filter((d) => !d.isFile() && d.name.startsWith('parent=')).map((d) => d.name.slice('parent='.length)))
   const indexed = new Set(idx.tiles.map((t) => t.parent))
   const orphans = [...onDisk].filter((p) => !indexed.has(p))
-  check('r8: no orphan parent dirs on disk', orphans.length === 0, `dirs=${n(onDisk.size)} orphans=${n(orphans.length)}${orphans.length ? ' e.g. ' + orphans.slice(0, 3) : ''}`)
+  check(`${L}: no orphan parent dirs on disk`, orphans.length === 0, `dirs=${n(onDisk.size)} orphans=${n(orphans.length)}${orphans.length ? ' e.g. ' + orphans.slice(0, 3) : ''}`)
 
   // -- read tiles ------------------------------------------------------------
   const toRead = SAMPLE_MODE ? stride(idx.tiles, SAMPLE_N) : idx.tiles
   const deepSet = new Set(stride(toRead, Math.min(DEEP_PARENT_TILES, toRead.length)).map((t) => t.parent))
+  const nib = e.h3Res.toString(16)
 
   let sum = 0
   let max = -Infinity
@@ -403,6 +593,7 @@ if (idx) {
   const errs = []
   let done = 0
   const t0 = Date.now()
+  const progressEvery = Math.max(500, Math.ceil(toRead.length / 6 / 500) * 500)
 
   await pool(toRead, CONCURRENCY, async (t) => {
     try {
@@ -418,7 +609,7 @@ if (idx) {
 
       const h3 = cols.h3
       for (let i = 0; i < h3.length; i++) {
-        if (typeof h3[i] !== 'string' || h3[i].length !== 15 || h3[i][1] !== '8') badRes++
+        if (typeof h3[i] !== 'string' || h3[i].length !== 15 || h3[i][1] !== nib) badRes++
       }
       // Partition proof: every cell must roll up to the parent named by the path.
       if (deepSet.has(t.parent)) {
@@ -432,49 +623,82 @@ if (idx) {
           shallowCells++
         }
       }
+      if (rollup) await rollup.onTile(t, cols)
     } catch (err) {
       readErr++
       if (errs.length < 3) errs.push(`${t.parent}: ${err.message}`)
     }
-    if (++done % 2000 === 0 || done === toRead.length) {
-      console.log(`      … ${n(done)}/${n(toRead.length)} tiles read (${((Date.now() - t0) / 1000).toFixed(1)}s)`)
+    if (++done % progressEvery === 0 || done === toRead.length) {
+      console.log(`      … ${L}: ${n(done)}/${n(toRead.length)} tiles read (${((Date.now() - t0) / 1000).toFixed(1)}s)`)
     }
   })
 
-  check('r8: every read tile parses', readErr === 0, `errors=${n(readErr)}${errs.length ? ' ' + errs.join(' | ') : ''}`)
-  check('r8: per-tile rows == index cellCount', rowMismatch === 0, `mismatched tiles=${n(rowMismatch)} of ${n(toRead.length)}`)
-  check('r8: no NaN/negative population', badPop === 0, `bad=${n(badPop)}`)
-  check('r8: lng ∈ [-180,180]', badLng === 0, `out-of-range=${n(badLng)}`)
-  check('r8: lat ∈ [-90,90]', badLat === 0, `out-of-range=${n(badLat)}`)
-  check('r8: every H3 index is res 8', badRes === 0, `malformed=${n(badRes)} of ${n(rows)}`)
+  check(`${L}: every read tile parses`, readErr === 0, `errors=${n(readErr)}${errs.length ? ' ' + errs.join(' | ') : ''}`)
+  check(`${L}: per-tile rows == index cellCount`, rowMismatch === 0, `mismatched tiles=${n(rowMismatch)} of ${n(toRead.length)}`)
+  check(`${L}: no NaN/negative population`, badPop === 0, `bad=${n(badPop)}`)
+  check(`${L}: lng ∈ [-180,180]`, badLng === 0, `out-of-range=${n(badLng)}`)
+  check(`${L}: lat ∈ [-90,90]`, badLat === 0, `out-of-range=${n(badLat)}`)
+  check(`${L}: every H3 index is res ${e.h3Res}`, badRes === 0, `malformed=${n(badRes)} of ${n(rows)}`)
   check(
-    `r8: cells roll up to declared r${idx.parentRes} parent`,
+    `${L}: cells roll up to declared r${idx.parentRes} parent`,
     parentMismatch === 0,
     `mismatches=${n(parentMismatch)}; deep=${n(deepCells)} cells in ${n(deepSet.size)} tiles + ${n(shallowCells)} spot cells`,
   )
 
   if (SAMPLE_MODE) {
     const declared = toRead.reduce((a, t) => a + t.cellCount, 0)
-    check('r8 (SAMPLE): rows read == declared for sample', rows === declared, `rows=${n(rows)} declared=${n(declared)}`)
-    console.log(`SKIP  r8: Σpop over all tiles — SAMPLE mode read ${n(toRead.length)}/${n(idx.tiles.length)} tiles (Σ of sample = ${n(Math.round(sum))})`)
+    check(`${L} (SAMPLE): rows read == declared for sample`, rows === declared, `rows=${n(rows)} declared=${n(declared)}`)
+    console.log(`SKIP  ${L}: Σpop over all tiles — SAMPLE mode read ${n(toRead.length)}/${n(idx.tiles.length)} tiles (Σ of sample = ${n(Math.round(sum))})`)
   } else {
-    check(`r8: rows read == ${n(EXPECTED_R8_CELLS)}`, rows === EXPECTED_R8_CELLS, `rows=${n(rows)}`)
+    check(`${L}: rows read == ${n(expected?.cells ?? idx.cellCount)}`, rows === (expected?.cells ?? idx.cellCount), `rows=${n(rows)}`)
     const dSum = sum - idx.sumPopulation
-    check('r8: Σpop over ALL tiles == index sumPopulation', Math.abs(dSum) <= SUM_TOL, `Σ=${n(Math.round(sum))} index=${n(idx.sumPopulation)} Δ=${dSum.toFixed(3)}`)
-    const dConst = sum - EXPECTED_SUM.r8
-    check(`r8: Σpop over ALL tiles == ${n(EXPECTED_SUM.r8)}`, Math.abs(dConst) <= SUM_TOL, `Δ=${dConst.toFixed(3)}`)
-    check('r8: Σpop ≈ 8.03 B', Math.abs(sum - WORLD_POP) < WORLD_TOL, `Σ=${n(Math.round(sum))}`)
-    check('r8: max(population) == index maxPopulation', Math.abs(max - idx.maxPopulation) < 1e-3, `max=${n(max)} index=${n(idx.maxPopulation)}`)
+    check(`${L}: Σpop over ALL tiles == index sumPopulation`, Math.abs(dSum) <= SUM_TOL, `Σ=${n(Math.round(sum))} index=${n(idx.sumPopulation)} Δ=${dSum.toFixed(3)}`)
+    const dConst = sum - EXPECTED_SUM[L]
+    check(`${L}: Σpop over ALL tiles == ${n(EXPECTED_SUM[L])}`, Math.abs(dConst) <= SUM_TOL, `Δ=${dConst.toFixed(3)}`)
+    check(`${L}: Σpop ≈ 8.03 B`, Math.abs(sum - WORLD_POP) < WORLD_TOL, `Σ=${n(Math.round(sum))}`)
+    check(`${L}: max(population) == index maxPopulation`, Math.abs(max - idx.maxPopulation) < 1e-3, `max=${n(max)} index=${n(idx.maxPopulation)}`)
   }
+  console.log(`      … ${L}: ${n(toRead.length)} tiles in ${((Date.now() - t0) / 1000).toFixed(1)}s`)
 
   const bytes = sizes.reduce((a, b) => a + b, 0)
   summary.push({
-    tier: 'r8',
+    tier: L,
     cells: SAMPLE_MODE ? sumDeclared : rows,
     sum: SAMPLE_MODE ? idx.sumPopulation : Math.round(sum),
     max: SAMPLE_MODE ? idx.maxPopulation : max,
     extra: `${n(idx.tiles.length)} tiles · ${mb(bytes)} · biggest ${mb(Math.max(...sizes))}`,
   })
+}
+
+{
+  const tiled = manifest.lods.filter((e) => e.tiled)
+  const indexes = {}
+  for (const e of tiled) indexes[e.lod] = await readIndex(e)
+  for (const e of tiled) {
+    const idx = indexes[e.lod]
+    if (!idx) continue
+    // Is this tier the CHILD of a tiled roll-up? Then sum it into its parent as it is read.
+    const parentLod = Object.keys(TILED_ROLLUPS).find((p) => TILED_ROLLUPS[p] === e.lod)
+    const parent = parentLod && byLod[parentLod]
+    let rollup = null
+    if (parent && indexes[parentLod]) {
+      if (SAMPLE_MODE) {
+        console.log(`SKIP  ${parentLod} ↔ ${e.lod}: children roll-up — SAMPLE mode does not read every ${e.lod} tile`)
+      } else if (e.tileParentRes < parent.tileParentRes) {
+        check(`${parentLod} ↔ ${e.lod}: ${e.lod} tiles nest in ${parentLod} tiles`, false, `r${e.tileParentRes} < r${parent.tileParentRes}`)
+      } else {
+        rollup = tiledRollup(parent, indexes[parentLod], e, idx)
+      }
+    } else if (parent) {
+      check(`${parentLod} ↔ ${e.lod}: both indexes present`, false)
+    }
+    const t0 = Date.now()
+    await verifyTiled(e, idx, rollup)
+    rollup?.finish(t0)
+  }
+  for (const [p, c] of Object.entries(TILED_ROLLUPS)) {
+    if (!byLod[p] || !byLod[c]) check(`${p} ↔ ${c}: both tiers in the manifest`, false, Object.keys(byLod).join(','))
+  }
 }
 
 // ------------------------------------------------- 100 MB Pages file limit

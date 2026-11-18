@@ -13,14 +13,16 @@ import {
   IconPlus,
 } from './icons'
 
-/** Zoom step per +/− press — a few presses per tier band (22 km → 9 km → 3 km → 400 m). */
+/** Zoom step per +/− press — about two presses per tier band (22 km → 9 km → 3 km → 1 km → 400 m). */
 export const ZOOM_STEP = 0.7
 
 export type ShareState = 'idle' | 'copied' | 'failed'
 
 /**
- * Vertical zoom ladder: shows *where in the scale* the camera is (globe → 9 km → 3 km → 400 m)
- * rather than just offering two anonymous buttons. The painted ladder is `aria-hidden`;
+ * Vertical zoom ladder: shows *where in the scale* the camera is (globe → 9 km → 3 km → 1 km → 400 m)
+ * rather than just offering two anonymous buttons. It is `h-40` (160 px): five tiers about
+ * 1.4 zoom levels apart need ~14.5 px per zoom level to keep their labels two label-heights
+ * apart over the −1 … 10 range (`zoomLadder.test.ts`). The painted ladder is `aria-hidden`;
  * a transparent native range input on top carries the label, value, drag and arrow-key
  * semantics, so the control is a real slider for keyboard and screen-reader users.
  */
@@ -43,7 +45,7 @@ function ZoomLadder({
   const active = bands.find((b) => b.lod === activeLod)
 
   return (
-    <div className="relative hidden h-32 w-full items-stretch gap-1.5 rounded px-0.5 has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-white/70 sm:flex">
+    <div className="relative hidden h-40 w-full items-stretch gap-1.5 rounded px-0.5 has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-white/70 sm:flex">
       {/* Scale labels, one per tier, parked at each band's midpoint. */}
       <div className="relative w-9 shrink-0" aria-hidden="true">
         {bands.map((b) => (
@@ -66,7 +68,7 @@ function ZoomLadder({
             key={b.lod}
             style={{ bottom: `${b.from * 100}%`, height: `calc(${(b.to - b.from) * 100}% - 2px)` }}
             className={`absolute inset-x-0 rounded-full ${
-              ['bg-white/12', 'bg-white/18', 'bg-white/24', 'bg-white/30'][i] ?? 'bg-white/20'
+              ['bg-white/12', 'bg-white/18', 'bg-white/24', 'bg-white/30', 'bg-white/36'][i] ?? 'bg-white/20'
             }`}
           />
         ))}

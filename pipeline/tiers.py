@@ -43,7 +43,8 @@ class TierSpec:
 
     lod: str
     h3_res: int
-    #: UI cell-size label (nominal H3 edge, km).
+    #: UI cell-size label (nominal H3 edge, km — H3's published average edge length,
+    #: rounded: r4 22.6, r5 8.5, r6 3.2, r7 1.2, r8 0.46).
     approx_km: float
 
 
@@ -52,6 +53,7 @@ TIERS: list[TierSpec] = [
     TierSpec("overview", 4, 22.0),  # Kontur r4, whole file   (build_lods.py)
     TierSpec("r5", 5, 8.5),  # parent roll-up of mid  (build_parents.py)
     TierSpec("mid", 6, 3.0),  # Kontur r6, whole file   (build_lods.py)
+    TierSpec("r7", 7, 1.2),  # parent roll-up of r8, r2-tiled (build_parents.py)
     TierSpec("r8", 8, 0.4),  # Kontur r8, r3-tiled    (build_tiles.py)
 ]
 

@@ -96,15 +96,15 @@ describe('selectActive while a tiled tier streams (Accept c)', () => {
 })
 
 describe('two tiled tiers adjacent in the band table (r7 by r2 parents, then r8)', () => {
-  // The r7 item's manifest: a tiled r7 between mid and r8.
-  const M7: Manifest = {
-    ...MANIFEST,
-    lods: [
-      ...MANIFEST.lods.filter((l) => l.lod !== 'r8').map((l) => (l.lod === 'mid' ? { ...l, maxZoom: 6.59 } : l)),
-      { ...MANIFEST.lods[2], lod: 'r7', file: undefined, tiled: true, tileParentRes: 2, indexFile: 'data/tiles/r7/index.json', h3Res: 7, approxKm: 1.2, minZoom: 6.59, maxZoom: 7.99 },
-      MANIFEST.lods[3],
-    ],
-  }
+  // The shipped manifest: a tiled r7 between mid and r8.
+  const M7: Manifest = MANIFEST
+  it('is the shipped table: mid ends where the r2-tiled r7 starts, r7 ends where r8 starts', () => {
+    const [mid7, r7e, r8e] = ['mid', 'r7', 'r8'].map((lod) => M7.lods.find((l) => l.lod === lod)!)
+    expect([r7e.tiled, r7e.tileParentRes, r7e.h3Res, r7e.indexFile]).toEqual([true, 2, 7, 'data/tiles/r7/index.json'])
+    expect([r7e.minZoom, r7e.maxZoom]).toEqual([mid7.maxZoom, r8e.minZoom])
+    // The zooms the cases below use sit where they claim: 7.2 inside r7, 9 inside r8.
+    expect(7.2 > r7e.minZoom && 7.2 < r7e.maxZoom && 9 > r8e.minZoom).toBe(true)
+  })
   const r7 = M7.lods.find((l) => l.lod === 'r7')!
   const r8 = M7.lods.find((l) => l.lod === 'r8')!
   const loaded = { overview, mid }

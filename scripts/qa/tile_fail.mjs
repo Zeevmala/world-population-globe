@@ -2,9 +2,10 @@
 /**
  * tile_fail — headless confirmation that ONE failed tile does not blank a tiled tier.
  *
- * Takes the finest tiled tier in the manifest (r8 today) and opens the dev server
- * deep-linked to Tokyo one zoom level inside its band (`#139.7/35.68/8.99` with r8 from
- * 7.99), aborts every request for the parent tile under the camera (Playwright `route.abort`,
+ * Takes the finest tiled tier in the manifest (r8 today) — or the one named by `--tier`
+ * (`--tier r7`) — and opens the dev server deep-linked to Tokyo inside its band: one zoom
+ * level past its start, or the band's middle if that comes first (`#139.7/35.68/8.99`
+ * with r8 from 7.99, `…/7.29` for r7's 6.59–7.99; `--zoom` overrides), aborts every request for the parent tile under the camera (Playwright `route.abort`,
  * on the browser context so the decode worker's fetches are intercepted too), and
  * waits for the app to publish the tier anyway. PASS = `activeLod` is the tier, with its
  * merged cells (`tiles[tier].data`) > 0 and aligned, the aborted tile really was
@@ -26,7 +27,10 @@
  * fix the requests posted to the dead workers were never settled and the app sat on
  * the loader forever.
  *
- * Usage: node scripts/qa/tile_fail.mjs [--port 5199] [--timeout-ms 300000] [--parent <h3>] [--fail-times N]
+ * Every tiled tier's tile requests are counted and every stream's published set is
+ * logged, so a run at r7 also shows what the r8 stream did beside it (informational).
+ *
+ * Usage: node scripts/qa/tile_fail.mjs [--tier <lod>] [--zoom Z] [--port 5199] [--timeout-ms 300000] [--parent <h3>] [--fail-times N]
  *        node scripts/qa/tile_fail.mjs --fail-worker [--port 5199] [--timeout-ms 180000]
  * Exit: 0 pass · 1 fail / inconclusive
  */
@@ -48,13 +52,16 @@ const PORT = Number(opt('port', '5199'))
 const TIMEOUT_MS = Number(opt('timeout-ms', '300000'))
 // After the abort has been seen, give up once no tile has been requested for this long.
 const QUIET_MS = 45_000
-// The finest tiled tier in the committed manifest (r8 today), viewed one zoom level past
-// the start of its band; the tile aborted is its parent (at the tier's tileParentRes)
-// under the camera.
-const TIER = JSON.parse(readFileSync(join(ROOT, 'public', 'data', 'manifest.json'), 'utf8'))
-  .lods.filter((l) => l.tiled)
-  .at(-1)
-const VIEW = { lng: 139.7, lat: 35.68, zoom: Math.round((TIER.minZoom + 1) * 100) / 100 }
+// The finest tiled tier in the committed manifest (r8 today) or `--tier`, viewed one zoom
+// level past the start of its band (or at its middle, if nearer); the tile aborted is its
+// parent (at the tier's tileParentRes) under the camera.
+const TILED = JSON.parse(readFileSync(join(ROOT, 'public', 'data', 'manifest.json'), 'utf8')).lods.filter((l) => l.tiled)
+const TIER = opt('tier', null) ? TILED.find((l) => l.lod === opt('tier')) : TILED.at(-1)
+if (!TIER) throw new Error(`--tier ${opt('tier')}: not a tiled tier in the manifest (${TILED.map((l) => l.lod)})`)
+const round2 = (z) => Math.round(z * 100) / 100
+const DEFAULT_ZOOM = round2(Math.min(TIER.minZoom + 1, (TIER.minZoom + TIER.maxZoom) / 2))
+const VIEW = { lng: 139.7, lat: 35.68, zoom: Number(opt('zoom', String(DEFAULT_ZOOM))) }
+if (!(VIEW.zoom >= TIER.minZoom && VIEW.zoom < TIER.maxZoom)) throw new Error(`zoom ${VIEW.zoom} is outside ${TIER.lod}'s band`)
 const PARENT = opt('parent', latLngToCell(VIEW.lat, VIEW.lng, TIER.tileParentRes))
 // Tile URLs live beside the tier's index: `data/tiles/<tier>/parent=<h3>/…`.
 const TILE_DIR = TIER.indexFile.slice(0, TIER.indexFile.lastIndexOf('/'))
@@ -144,6 +151,7 @@ async function main() {
   const pageErrors = []
   const tileWarnings = []
   const aborts = []
+  const requestsByTier = {}
   let lastTileActivity = Date.now()
   let result
   if (FAIL_WORKER) {
@@ -163,11 +171,16 @@ async function main() {
     page.on('console', (msg) => {
       if (msg.type() === 'warning' && /tile/i.test(msg.text())) tileWarnings.push(msg.text())
     })
-    // One route for every r8 tile request, so tile activity is tracked even though the
-    // fetches come from the decode worker (whose requests never reach `page.on`).
-    await context.route(`**/${TILE_DIR}/parent=*/**`, (route) => {
+    // One route for every tiled tier's tile requests, so tile activity is tracked even
+    // though the fetches come from the decode worker (whose requests never reach
+    // `page.on`); only the target tier's tile under the camera is aborted.
+    await context.route(`**/data/tiles/*/parent=*/**`, (route) => {
+      const url = route.request().url()
+      const dir = url.match(/data\/tiles\/([^/]+)\/parent=/)?.[1] ?? '?'
+      requestsByTier[dir] = (requestsByTier[dir] ?? 0) + 1
+      if (!url.includes(`/${TILE_DIR}/`)) return route.continue()
       lastTileActivity = Date.now()
-      if (!route.request().url().includes(`parent=${PARENT}/`)) return route.continue()
+      if (!url.includes(`parent=${PARENT}/`)) return route.continue()
       if (aborts.length >= FAIL_TIMES) {
         log(`let through: ${route.request().url().replace(server.url, '')}`)
         return route.continue()
@@ -191,6 +204,9 @@ async function main() {
           tierCells: d ? d.h3.length : 0,
           aligned: d ? [d.population.length, d.lng.length, d.lat.length].every((n) => n === d.h3.length) : null,
           zoom: s?.viewState.zoom ?? null,
+          streams: Object.fromEntries(
+            Object.entries(s?.tiles ?? {}).map(([k, t]) => [k, `${t.status}, ${t.parents.length} parents, ${t.data ? t.data.h3.length : 0} cells`]),
+          ),
           rejections: window.__qaRejections ?? [],
         }
       }, TIER.lod)
@@ -246,6 +262,8 @@ async function main() {
 
   log(`activeLod=${result.state.activeLod} ${TIER.lod}Cells=${result.state.tierCells} aligned=${result.state.aligned}`)
   log(`aborted requests for ${PARENT}: ${result.aborts.length} (at ms ${result.aborts.join(', ')})`)
+  log(`tile requests by tier: ${JSON.stringify(requestsByTier)}`)
+  log(`tile streams published: ${JSON.stringify(result.state.streams)}`)
   log(`unhandled rejections / page errors: ${result.unhandled.length}${result.unhandled.length ? ' — ' + result.unhandled.join(' | ') : ''}`)
   log(`tile console.warn lines: ${result.tileWarnings.length}${result.tileWarnings.length ? ' — ' + result.tileWarnings.join(' | ') : ''}`)
   for (const [k, v] of Object.entries(result.checks)) log(`  ${v ? 'ok  ' : 'FAIL'} ${k}`)

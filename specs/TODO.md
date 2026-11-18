@@ -43,25 +43,6 @@ Option A (decided 2026-11-18, see **Backlog**) comes first, as five items in dep
 order — each leaves the app coherent on its own. The two items after them each wait on
 something outside the session.
 
-- [ ] r7 tier, tiled by r2 parents: between r6 and r8 a cell otherwise grows from 3 px to
-      21 px before the 49× jump to r8. Pipeline (`pipeline/build_parents.py`): aggregate the
-      committed r8 tiles to their r7 parents (same vectorized method and schema as r5),
-      partition by r2 parent into `public/data/tiles/r7/` with an `index.json` like r8's
-      (r2 keeps a 1280×800 screen at the band's entry zoom within ~20 tiles; r3 would need
-      over 60), manifest entry with the band from the 3-px rule (≈ 6.59–7.99; r6 then ends
-      at 6.59). `verify:data` covers it: Σ, counts, every file < 100 MB, tile ↔ parent
-      roll-up, r7 ↔ r8 children sums. `scripts/verify_live.mjs` (the post-deploy gate)
-      checks every tier the manifest lists instead of a fixed overview / mid / r8 — it has
-      ignored r5 since that tier shipped. Client: nothing but the tier table should need
-      to change after the previous item — if more does, say what and why.
-      Accept: (1) `npm run verify:data` ALL PASS with five tiers and fails under tampering
-      (a deleted tile; a mislabelled parent); Σ r7 = Σ r8; (2) total added data and the
-      largest tile reported, every file < 100 MB, and the published site still under
-      GitHub Pages' 1 GB limit with the figure stated; (3) unit tests: zoom 7.2 → r7 on the
-      real band table, r6 → r7 → r8 crossings keep hysteresis, column height continuous;
-      (4) render gate green with an r7 sample and both crossings; ≤ 120 k cells; 0 console
-      errors.
-      Gate: verify, qa:render, verify:data.
 - [ ] Tier selection that follows latitude and canvas size: the bands are zoom thresholds
       at the equator on a nominal canvas, but GlobeView scales by 1/cos(lat) — at 60° N a
       cell is twice as wide on screen as the band assumes — and a larger canvas holds more
@@ -122,6 +103,9 @@ something outside the session.
       against the dev server, uploading the report + screenshots as artifacts, and fail on
       console errors, a blank canvas or a broken cell cap (the exact checks — the
       SwiftShader stall comparison stays advisory; see `scripts/qa/render_qa.mjs`).
+      Also for this item: `scripts/verify_live.mjs` now walks whatever tiers the deployed
+      manifest lists, and so no longer fails if one is missing altogether — have it assert
+      the tier set it expects (or at least a count) so a manifest that lost r8 cannot pass.
       Waiting on the user (2026-11-17): the Accept needs a real GitHub Actions run, and
       `ci.yml` only triggers on a pull request or a push to `main` — a PR has not been
       asked for. The same PR would be the first Actions run of the `verify` +
@@ -702,3 +686,58 @@ something outside the session.
       costs 7–9 merges and ~50–60 MB of allocation. Not verified: the r7 + r8 two-stream
       path in a browser (no r7 data yet — unit-tested on a synthetic manifest), and
       pan smoothness on a real GPU.)*
+- [x] r7 tier, tiled by r2 parents: between r6 and r8 a cell otherwise grows from 3 px to
+      21 px before the 49× jump to r8. Pipeline (`pipeline/build_parents.py`): aggregate the
+      committed r8 tiles to their r7 parents (same vectorized method and schema as r5),
+      partition by r2 parent into `public/data/tiles/r7/` with an `index.json` like r8's
+      (r2 keeps a 1280×800 screen at the band's entry zoom within ~20 tiles; r3 would need
+      over 60), manifest entry with the band from the 3-px rule (≈ 6.59–7.99; r6 then ends
+      at 6.59). `verify:data` covers it: Σ, counts, every file < 100 MB, tile ↔ parent
+      roll-up, r7 ↔ r8 children sums. `scripts/verify_live.mjs` (the post-deploy gate)
+      checks every tier the manifest lists instead of a fixed overview / mid / r8 — it has
+      ignored r5 since that tier shipped. Client: nothing but the tier table should need
+      to change after the previous item — if more does, say what and why.
+      Accept: (1) `npm run verify:data` ALL PASS with five tiers and fails under tampering
+      (a deleted tile; a mislabelled parent); Σ r7 = Σ r8; (2) total added data and the
+      largest tile reported, every file < 100 MB, and the published site still under
+      GitHub Pages' 1 GB limit with the figure stated; (3) unit tests: zoom 7.2 → r7 on the
+      real band table, r6 → r7 → r8 crossings keep hysteresis, column height continuous;
+      (4) render gate green with an r7 sample and both crossings; ≤ 120 k cells; 0 console
+      errors.
+      Gate: verify, qa:render, verify:data.
+      *(Done 2026-11-18, factory tick 11, Option A step 4. `pipeline/build_parents.py` now
+      builds r7 as well as r5: it reads exactly the r8 tiles the r8 index lists, sums them
+      into their H3 parents (bit arithmetic in plain DuckDB SQL, centers from `h3ronpy`, no
+      row loops), and writes `public/data/tiles/r7/parent=<r2>/data_0.parquet` with an
+      index in the r8 format; `pipeline/tiers.py` gained one table row and the band fell
+      out of the 3-px rule. Bands: overview −2–3.78, r5 3.78–5.18, mid 5.18–6.59, r7
+      6.59–7.99, r8 from 7.99. `verify_data.mjs` checks every tiled tier the same way and
+      proves r7 against r8 one r2 tile group at a time (which also checks every r8 cell's
+      r3 placement, not a 600-tile sample); `verify_live.mjs` walks whatever tiers the
+      manifest lists. The client needed only the tier table plus the zoom ladder growing
+      from 128 to 160 px so five labels stay ≥ 20 px apart.
+      Evidence: r7 = 9,012,014 cells in 2,409 tiles, Σ = 8,031,924,024 = Σ r8, max 281,504,
+      every population a whole number below 2^24. The checker rebuilt it independently from
+      all 32,957,699 r8 rows with an H3 library (same cells, every population equal, every
+      cell in the tile of its true r2 parent; five populated r2 tiles are pentagons and are
+      selected correctly), re-ran the pipeline twice in a scratch copy (all 2,410 files
+      byte-identical to the tree and to each other; manifest identical but for
+      `generatedAt`), re-derived the bands (6.5861, 7.9898), and tampered seven ways —
+      deleted r7 tile, relabelled tile with and without a fixed-up index, a cell moved to
+      a neighbouring tile, ±100 on two populations with Σ preserved, index and manifest
+      sums raised together, a deleted r8 tile — every one caught. `verify:data` ALL PASS in
+      ~51–58 s (was ~22 s), peak ~0.85 GB. 226 unit tests. Render gate green in 373 s with
+      all five tiers reached: r7 21,223 cells at zoom 7.29, r8 50,972 at zoom 9, both
+      crossings, 0 console errors. Headless (maker's runs): `tile_fail.mjs --tier r7
+      --zoom 7.2` PASS (r7 active, 16,647 cells with a tile aborted) and the r8 default.
+      Checker PASS first time.
+      Sizes: +141.2 MB (140.9 MB of tiles, largest 281 kB, plus a 271 kB index) — more than
+      the ~90 MB guessed, because r8 averages only 3.66 populated cells per r7 parent.
+      `public/` is now 684 MB and `dist/` 686 MB, 68.6 % of GitHub Pages' 1 GB limit; a data
+      refresh adds ~643 MB of tile blobs to git history.
+      Not verified: `verify_live.mjs` against a deployment (checked against a local static
+      server of `dist/`, which does not gzip); both tiled streams publishing at the same
+      moment in a browser beyond the render gate's r7 → r8 crossing.
+      Known: `verify_live.mjs` no longer asserts that any particular tier exists, so a
+      deployed manifest that had lost r8 would pass (noted on the CI item); the 512-person
+      Σ tolerance, which pre-dates this, also applies to r7 although its sum is exact.)*

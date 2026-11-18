@@ -25,10 +25,10 @@ React 19 + TypeScript (strict) + Vite + Tailwind v4 · deck.gl 9 · Zustand · h
 | `npm run gate` | **The factory gate** — path-scoped: queue lint + `verify` always; `qa:render --quick` if the browser loads what changed; `verify:data` if pipeline/data changed; every changed file < 100 MB |
 | `npm run queue -- <status\|next\|lint>` | The one parser of `specs/TODO.md` (first unchecked item, blocked state, format) |
 | `npm run verify:live [url]` | Post-deploy E2E — fetch + parse the deployed manifest/tiers/tile, Σ-pop check |
-| `npm run verify:data` | Local data gate — every whole tier + all 12,761 r8 tiles: Σ-pop, counts, CRS bounds, H3 parent roll-ups (tile ↔ parent, r5 ↔ r6), band contiguity, file sizes |
+| `npm run verify:data` | Local data gate — every whole tier + all 2,409 r7 and 12,761 r8 tiles: Σ-pop, counts, CRS bounds, H3 parent roll-ups (tile ↔ parent, r5 ↔ r6, r7 ↔ r8), band contiguity, file sizes |
 | `npm run qa:render` | Headless render QA — zoom sweep, frame timing, stall + console-error gate |
 | `npm run dev` | Vite dev server (http://localhost:5173) |
-| `npm run data` / `npm run data:tiles` | Regenerate r4/r6 Parquet / r8 tile pyramid (Python + DuckDB) |
+| `npm run data` / `npm run data:tiles` | Regenerate r4/r6 Parquet + the derived r5 and r7 tiers / r8 tile pyramid (Python + DuckDB; `data:tiles` first — r7 is built from it) |
 
 CI: `.github/workflows/ci.yml` (`verify` + `verify:data` + queue lint). Deploy: `deploy.yml`
 (same gates before publishing → Pages → `verify-live` post-deploy gate with 5×15 s
@@ -36,10 +36,10 @@ CDN-propagation retries).
 
 ## Invariants (violations are P0)
 
-- Every LOD tier sums to ≈ 8.03 B people (r4: 8,031,924,025; r5/r6/r8: 8,031,924,024 —
-  r5 is the exact H3-parent roll-up of r6; the r4 difference is float32 rounding in the
+- Every LOD tier sums to ≈ 8.03 B people (r4: 8,031,924,025; r5/r6/r7/r8: 8,031,924,024 —
+  r5 / r7 are the exact H3-parent roll-ups of r6 / r8; the r4 difference is float32 rounding in the
   pipeline's `CAST(... AS FLOAT)`, not a data difference); every committed file < 100 MB
-  (Pages limit). `npm run verify:data` asserts all of it against the committed files in ~22 s.
+  (Pages limit). `npm run verify:data` asserts all of it against the committed files in ~60 s.
 - `public/data/**` is pipeline output — never hand-edit; change `pipeline/`, re-run, re-assert.
 - Kontur source geometry is EPSG:3857; client centroids are EPSG:4326 (`always_xy`).
   The H3 index itself is CRS-free and drives hexagon geometry client-side.
@@ -54,7 +54,7 @@ CDN-propagation retries).
   (`lib/density.ts`). No linear scaling on right-skewed data, no rainbow ramps.
 - Column height is continuous in **zoom**, never stepped per tier (`lib/scales.ts`
   `maxColumnHeightM`) — a tier switch must change mesh resolution, never column scale.
-- mid/r8 render path stays viewport-culled + capped (120 k cells/frame); data stays columnar
+- mid/r7/r8 render path stays viewport-culled + capped (120 k cells/frame); data stays columnar
   typed arrays + deck.gl non-iterable `{length}` accessors — no per-cell JS objects.
 - Pipeline is vectorized DuckDB SQL — no Python row loops.
 

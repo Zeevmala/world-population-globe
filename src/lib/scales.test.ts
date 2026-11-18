@@ -36,6 +36,17 @@ describe('maxColumnHeightM', () => {
     }
   })
 
+  it('agrees across both r7 crossings (r6 → r7 and r7 → r8), including their hysteresis', () => {
+    const r7 = MANIFEST.lods.find((l) => l.lod === 'r7')!
+    for (const t of [r7.minZoom, r7.maxZoom]) {
+      // A crossing happens anywhere in [t − 0.15, t] (hysteresis): no step in that span.
+      for (let z = t - 0.15; z <= t; z += 0.005) {
+        expect(maxColumnHeightM(z) / maxColumnHeightM(z + 0.005)).toBeCloseTo(1, 2)
+      }
+      expect(maxColumnHeightM(t - 1e-6) / maxColumnHeightM(t + 1e-6)).toBeCloseTo(1, 4)
+    }
+  })
+
   it('stays visible to zoom 10: never under 1 km, a fixed scene past zoom ≈ 8.07', () => {
     // Tallest column (top of the density domain), metres and px at the view center (lat 0):
     //   zoom 5 → 20.8 km / 8.5 px · 7 → 2.88 km / 4.7 px · 8.5 → 1 km / 4.6 px · 10 → 1 km / 13.1 px

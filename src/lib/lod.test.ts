@@ -58,31 +58,41 @@ describe('pickLod', () => {
 /**
  * The shipped band table (`MANIFEST` is pinned to `public/data/manifest.json` by
  * `scripts/bands.test.mjs`): one zoom inside each band, and the hysteresis at each of
- * the three thresholds — held 0.1 below on the way out, no early entry on the way in,
- * released 0.2 below.
+ * the four thresholds — held 0.1 below on the way out, no early entry on the way in,
+ * released 0.2 below. Both tiled tiers (r7, r8) publish covering tile sets here.
  */
 describe('the shipped band table', () => {
   const loaded = { overview: tiny('overview', 4), r5: tiny('r5', 5), mid: tiny('mid', 6) }
-  const r8 = tiny('r8', 8)
+  const tiles = {
+    r7: tileSet(tiny('r7', 7), { lod: 'r7', parentRes: 2 }),
+    r8: tileSet(tiny('r8', 8)),
+  }
   const tierAt = (zoom: number, active?: string) =>
-    selectActive(view(139.7, 35.68, zoom), SEL_CANVAS, MANIFEST, loaded, { r8: tileSet(r8) }, active, COVERS).entry?.lod
+    selectActive(view(139.7, 35.68, zoom), SEL_CANVAS, MANIFEST, loaded, tiles, active, COVERS).entry?.lod
 
-  it('is overview → r5 → mid → r8, each band starting where the last ends', () => {
+  it('is overview → r5 → mid → r7 → r8, each band starting where the last ends', () => {
     expect(MANIFEST.lods.map((l) => [l.lod, l.h3Res])).toEqual([
       ['overview', 4],
       ['r5', 5],
       ['mid', 6],
+      ['r7', 7],
       ['r8', 8],
     ])
     for (let i = 1; i < MANIFEST.lods.length; i++) {
       expect(MANIFEST.lods[i].minZoom).toBe(MANIFEST.lods[i - 1].maxZoom)
     }
+    // r7 is tiled by r2 parents, r8 by r3.
+    expect(MANIFEST.lods.filter((l) => l.tiled).map((l) => [l.lod, l.tileParentRes])).toEqual([
+      ['r7', 2],
+      ['r8', 3],
+    ])
   })
 
-  it('zoom 3 → r4, 4.5 → r5, 6 → r6, 9 → r8', () => {
+  it('zoom 3 → r4, 4.5 → r5, 6 → r6, 7.2 → r7, 9 → r8', () => {
     expect(tierAt(3)).toBe('overview')
     expect(tierAt(4.5)).toBe('r5')
     expect(tierAt(6)).toBe('mid')
+    expect(tierAt(7.2)).toBe('r7')
     expect(tierAt(9)).toBe('r8')
     expect(tierAt(10)).toBe('r8')
   })
@@ -90,7 +100,8 @@ describe('the shipped band table', () => {
   it.each([
     ['overview', 'r5'],
     ['r5', 'mid'],
-    ['mid', 'r8'],
+    ['mid', 'r7'],
+    ['r7', 'r8'],
   ])('keeps hysteresis at the %s → %s threshold', (coarse, fine) => {
     const t = MANIFEST.lods.find((l) => l.lod === fine)!.minZoom
     expect(tierAt(t - 0.01, coarse)).toBe(coarse) // no early entry
@@ -277,7 +288,7 @@ describe('cullForView — the window is the real footprint (against GlobeViewpor
   // the cull made at any view on a key must cover the screen of every other view on it:
   // next to a pole, past the Mercator limit, at the antimeridian, at the bucket's corners
   // and both ends of its zoom range. The zooms are the ones culled tiers run at since the
-  // re-band — r5 from 3.63 (its 3.78 entry less the hysteresis), mid, then the merged r8
+  // re-band — r5 from 3.63 (its 3.78 entry less the hysteresis), mid, then the merged r7 and r8
   // tiles up to MAX_ZOOM 10 — on the render harness's 900×560 canvas (the (a) sweep in
   // `cullWindow.test.ts` covers 1280×800, 1920×1080 and 375×812).
   const anchors = [

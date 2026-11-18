@@ -14,7 +14,7 @@ export const MANIFEST: Manifest = {
   license: 'CC-BY 4.0',
   attribution: '© Kontur (kontur.io), CC-BY 4.0',
   crs: 'EPSG:4326',
-  generatedAt: '2026-11-18T16:43:24Z',
+  generatedAt: '2026-11-18T20:05:34Z',
   lods: [
     {
       lod: 'overview',
@@ -44,9 +44,22 @@ export const MANIFEST: Manifest = {
       h3Res: 6,
       approxKm: 3,
       minZoom: 5.18,
-      maxZoom: 7.99,
+      maxZoom: 6.59,
       cellCount: 2016971,
       maxPopulation: 1949226,
+      sumPopulation: 8031924024,
+    },
+    {
+      lod: 'r7',
+      tiled: true,
+      tileParentRes: 2,
+      indexFile: 'data/tiles/r7/index.json',
+      h3Res: 7,
+      approxKm: 1.2,
+      minZoom: 6.59,
+      maxZoom: 7.99,
+      cellCount: 9012014,
+      maxPopulation: 281504,
       sumPopulation: 8031924024,
     },
     {

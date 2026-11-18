@@ -5,16 +5,18 @@ Everything under `public/data/**` is pipeline output. Never hand-edit it: change
 
 ## 1. What ships today
 
-Kontur Population **2023-11-01**, baked into four LOD tiers. Figures below are not
+Kontur Population **2023-11-01**, baked into five LOD tiers. Figures below are not
 copied from the manifest — they are what `npm run verify:data` decoded from the
-committed Parquet (FULL mode, `ALL PASS`; 2026-08-28 for r4/r6/r8, 2026-11-18 for r5,
-≈ 21.6 s since r5 and its roll-up checks were added).
+committed Parquet (FULL mode, `ALL PASS`; 2026-08-28 for r4/r6/r8, 2026-11-18 for r5
+and r7, ≈ 58 s and ~0.86 GB peak RSS since the r7 ↔ r8 roll-up was added — it was
+≈ 22 s before r7).
 
 | tier | H3 res | ≈ cell | cells | Σ population | max cell | storage | zoom band |
 |---|---|---|---|---|---|---|---|
 | `overview` | r4 | 22 km | 71,283 | 8,031,924,025 | 22,732,636 | `overview.parquet`, 1,189,500 B | −2 – 3.78 |
 | `r5` | r5 | 9 km | 393,791 | 8,031,924,024 | 8,333,304 | `r5.parquet`, 6,428,136 B | 3.78 – 5.18 |
-| `mid` | r6 | 3 km | 2,016,971 | 8,031,924,024 | 1,949,226 | `mid.parquet`, 31,277,924 B | 5.18 – 7.99 |
+| `mid` | r6 | 3 km | 2,016,971 | 8,031,924,024 | 1,949,226 | `mid.parquet`, 31,277,924 B | 5.18 – 6.59 |
+| `r7` | r7 | 1 km | 9,012,014 | 8,031,924,024 | 281,504 | 2,409 tiles (r2 parents), 140,921,575 B | 6.59 – 7.99 |
 | `r8` | r8 | 400 m | 32,957,699 | 8,031,924,024 | 40,673 | 12,761 tiles, 502,427,581 B | 7.99 – (max zoom 10) |
 
 The bands come from `pipeline/tiers.py` — a tier starts where its hexagon is 3 CSS px
@@ -25,10 +27,22 @@ into its H3 r5 parents. Every r6 population is a whole number and every r5 sum i
 sum of its r6 children with no tolerance. Its lng/lat is the H3 cell center (not a
 reprojected Kontur centroid, as in the other tiers).
 
-`public/data/**` total before r5: **12,766 files, 536.47 MB** (r5 adds one 6.43 MB file). Largest file `mid.parquet`
-(31.28 MB); largest tile 267,712 B; tile mean 39,372 B, median 13,022 B, p99 213,780 B.
-Plus `tiles/r8/index.json` (1,431,491 B) and `land.geojson` (138,160 B, Natural Earth
-110 m basemap outline — not population data).
+`r7` is derived the same way, from the committed r8 pyramid: `build_parents.py` reads
+every tile `tiles/r8/index.json` lists, sums r8 into its H3 r7 parents (every r8
+population is a whole number, max 40,673; every r7 sum ≤ 281,504 < 2^24, so float32
+is exact) and writes a pyramid partitioned by **r2** parent —
+`tiles/r7/parent=<r2>/data_0.parquet` plus an `index.json` in the r8 index's format.
+r2 keeps a 1280×800 screen at the band's entry zoom within ~20 tiles (r3 would need
+over 60). Without r7 an r6 cell grows from 3 px to 21 px before the 49× jump to r8.
+No populated r7 cell is an H3 pentagon (all twelve sit over open ocean).
+
+`public/data/**` total: **15,177 files, 684.09 MB** (before r7: 12,767 files, 542.89 MB;
+r7 adds 2,410 files, 141,192,653 B with its index and manifest entry). Largest file
+`mid.parquet` (31.28 MB). r8 tiles: largest 267,712 B; mean 39,372 B, median 13,022 B,
+p99 213,780 B. r7 tiles: largest 281,287 B (`82319ffffffffff`); mean 58,498 B, median
+24,351 B, p99 252,205 B. Plus `tiles/r8/index.json` (1,431,491 B), `tiles/r7/index.json`
+(270,768 B) and `land.geojson` (138,160 B, Natural Earth 110 m basemap outline — not
+population data). The built site (`dist/`) is 685.5 MB of the 1 GB Pages limit.
 
 Per-tier schema: `h3:VARCHAR, population:FLOAT, lng:FLOAT, lat:FLOAT`.
 
@@ -39,7 +53,7 @@ Not a data discrepancy. Upstream `kontur_population_20231101_r4.gpkg` holds
 **22,732,635.0** (read directly from the GeoPackage, 2026-08-28). The pipeline
 `CAST(... AS FLOAT)`s to float32 for compactness; float32 rounding lifts that max to
 22,732,636 and the r4 total to 8,031,924,025. The r6/r8 tiers round the other way and
-land on 8,031,924,024, and r5 — summed from r6 — inherits r6's exact total. The exact
+land on 8,031,924,024, and r5 / r7 — summed from r6 / r8 — inherit their exact total. The exact
 per-tier totals are the ones in the table above (CLAUDE.md's invariant lists the same),
 and they are what `verify_data.mjs` asserts.
 
@@ -110,12 +124,19 @@ GeoPackage. Re-run this check before trusting any new release.
 1. Each tier's Σ population is the exact value in §1 and stays ≈ 8.03 B.
 1a. r5 is exactly the H3-parent roll-up of r6: 393,791 cells, every r5 cell the parent of
    ≥ 1 r6 cell, every r6 cell's parent present, each r5 population == Σ of its r6 children.
+1b. r7 is exactly the H3-parent roll-up of r8, the same four ways, and every r7 cell sits
+   in the tile of its r2 parent. Checked tile group by tile group during the r8 pass
+   (an r2 tile's children are exactly the r8 tiles of its r3 children), so it never
+   holds more than a few groups in memory.
 2. Parquet row count == the tier's `cellCount`; per-tile rows == the tile's `cellCount`.
-3. Σ of the 12,761 per-tile `cellCount`s == the r8 `cellCount` (32,957,699), and every
-   tile listed in `index.json` exists on disk with no unlisted `parent=` dir beside it.
-4. Every r8 cell rolls up to the H3 r3 parent named by its directory
-   (`cellToParent(cell, 3) === parent`). A mis-partitioned pyramid renders holes and
-   duplicate cells, and nothing else catches it.
+3. For each tiled tier, Σ of its per-tile `cellCount`s == its `cellCount` (r7: 2,409
+   tiles, 9,012,014; r8: 12,761 tiles, 32,957,699), and every tile listed in its
+   `index.json` exists on disk under `parent=<its parent>/` with no unlisted `parent=`
+   dir beside it.
+4. Every tile's cells roll up to the H3 parent named by its directory
+   (`cellToParent(cell, parentRes) === parent`) — for r8 every cell, as a by-product of
+   the r7 roll-up. A mis-partitioned pyramid renders holes and duplicate cells, and
+   nothing else catches it.
 5. Every H3 index carries its tier's resolution (nibble 1 of the 15-char index).
 6. Populations finite and non-negative; lng/lat in range.
 7. **Every committed file < 100 MB** — GitHub's hard blob limit. `build_tiles.py`
@@ -126,8 +147,8 @@ GeoPackage. Re-run this check before trusting any new release.
 ## 6. Verify
 
 ```bash
-npm run verify:data            # FULL: reads all 12,761 r8 tiles — ~19 s, no network
-npm run verify:data -- --sample=500      # 500 strided tiles; existence + Σ cellCount still cover all
+npm run verify:data            # FULL: reads all 2,409 r7 + 12,761 r8 tiles — ~58 s, no network
+npm run verify:data -- --sample=500      # 500 strided tiles per tiled tier, no r7 ↔ r8 roll-up; existence + Σ cellCount still cover all
 node scripts/verify_data.mjs --concurrency=16
 ```
 
@@ -135,7 +156,8 @@ Offline and read-only: it opens the committed `public/data/**` from disk with th
 hyparquet path the browser uses. Prints `PASS`/`FAIL` per assertion, a per-tier summary
 table, and `ALL PASS` or `N FAILURE(S)`; exit code is non-zero on any failure. FULL is
 the default and the mode is printed on line 2 — a `SAMPLE` run explicitly `SKIP`s the
-all-tile Σ-population assertion, so never accept a sampled run as a release gate.
+all-tile Σ-population assertions and the r7 ↔ r8 roll-up, so never accept a sampled run
+as a release gate.
 
 This is the offline twin of `npm run verify:live`, which proves the *deployed* files
 parse over HTTP. Both are needed: `verify:data` catches a bad bake before it is
@@ -146,8 +168,9 @@ incompatibility, postmortem 2026-06-08).
 
 Prerequisites: Python with `pip install -r pipeline/requirements.txt` (`duckdb`, `h3`,
 `h3ronpy`, `pyarrow`; the DuckDB `spatial` and community `h3` extensions are installed
-by `build_lods.py` / `build_tiles.py` — `build_parents.py` needs neither, so the r5 tier
-and the manifest's bands can be rebuilt offline from the committed r6), Node deps
+by `build_lods.py` / `build_tiles.py` — `build_parents.py` needs neither, so the r5 and
+r7 tiers and the manifest's bands can be rebuilt offline from the committed r6 and r8),
+Node deps
 installed, and **≥ 12 GB free
 disk** — ~2.63 GB of `.gz` plus ~7.1 GB of decompressed GeoPackage land in
 `pipeline/.cache/` (gitignored, never deleted automatically), on top of the 536 MB of
@@ -159,13 +182,13 @@ output.
 #    pipeline/build_lods.py    : Tier.url  -> kontur_population_<DATE>_r{res}.gpkg.gz
 #    pipeline/build_tiles.py   : R8_URL    -> kontur_population_<DATE>.gpkg.gz
 
-# 2. Coarse tiers (downloads 6.7 MB + 185 MB gz).
-npm run data                       # -> overview.parquet, mid.parquet, then (build_parents.py)
-                                   #    r5.parquet + every manifest band from pipeline/tiers.py
-
-# 3. r8 pyramid (downloads 2.44 GB gz, decompresses to ~6.6 GB).
+# 2. r8 pyramid first (downloads 2.44 GB gz, decompresses to ~6.6 GB) — r7 is built from it.
 python pipeline/build_tiles.py --measure-only     # count populated cells (downloads+decompresses first)
 npm run data:tiles                                # r3 parents (the shipped pyramid) — see below
+
+# 3. Coarse tiers (downloads 6.7 MB + 185 MB gz), then the derived ones.
+npm run data                       # -> overview.parquet, mid.parquet, then (build_parents.py)
+                                   #    r5.parquet, tiles/r7/** + every manifest band from pipeline/tiers.py
 
 # 4. Gate.
 npm run verify:data
@@ -180,21 +203,25 @@ Notes that will bite you:
   silently rebuilt tens-of-MB tiles that still passed the 95 MB guard.
   `useTileStreaming` sizes its `gridDisk` from `index.json`'s `parentRes`, so a coarser
   pyramid does not error — the client just streams far more bytes per viewport.
-- `build_tiles.py` **`rmtree`s `public/data/tiles/r8` first.** A failed run leaves you
-  with no tiles; nothing is incremental.
+- `build_tiles.py` **`rmtree`s `public/data/tiles/r8` first**, and `build_parents.py`
+  `tiles/r7`. A failed run leaves you with no tiles; nothing is incremental.
 - Order matters: `build_lods.py` writes `manifest.json`, `build_parents.py` derives r5
-  from the fresh `mid.parquet` and patches its entry in, `build_tiles.py` only patches
-  the `r8` entry into an existing one and exits if it is missing. All three re-band every
-  entry from `pipeline/tiers.py`; to change a band, edit the rule or the table there and
-  run `python pipeline/build_parents.py` (seconds, offline) — never edit the manifest.
+  from the fresh `mid.parquet` and r7 from the r8 tiles on disk and patches both entries
+  in, `build_tiles.py` only patches the `r8` entry into an existing one and exits if it is
+  missing. After any r8 rebuild, `build_parents.py` must run again (step 3 does) or r7
+  describes the old r8 — `verify:data`'s roll-up check fails if it does. All three
+  re-band every entry from `pipeline/tiers.py`; to change a band, edit the rule or the
+  table there and run `python pipeline/build_parents.py` (~13 s, offline) — never edit
+  the manifest. Its output is byte-identical across runs (rows sorted, one-thread COPY)
+  except the manifest's `generatedAt`.
 - Both `pipeline/.cache/*.gpkg.gz` and `*.gpkg` are cache-hit-skipped by name. Changing
   `DATA_DATE` without changing the cache filenames (`kontur_r4.gpkg.gz` etc.) will
   re-use the **old** download. Clear `pipeline/.cache/` on a version bump.
 - Runtime is download-bound (2.6 GB over the wire) plus one vectorized DuckDB
   `COPY … PARTITION_BY (parent)` over 33 M rows. Not re-measured in this audit — do not
   quote a figure you have not observed.
-- Every refresh rewrites all 12,761 tile blobs. Git cannot delta compressed Parquet, so
-  the ~502 MB of tiles is added to history again; `.git` is already 329 MB. Budget for
+- Every refresh rewrites all 12,761 r8 and 2,409 r7 tile blobs. Git cannot delta
+  compressed Parquet, so the ~643 MB of tiles is added to history again; `.git` is already 329 MB. Budget for
   that, or move the pyramid to a release asset / CDN (already flagged in
   `docs/architecture.md` §6).
 
@@ -236,19 +263,20 @@ Cost of a full refresh at today's magnitudes:
 | item | cost |
 |---|---|
 | download | 2.63 GB (`.gz`: 2.44 GB r8 + 185 MB r6 + 6.7 MB r4) |
-| peak disk | ~9.8 GB in `pipeline/.cache/` + 536 MB of output |
+| peak disk | ~9.8 GB in `pipeline/.cache/` + 684 MB of output |
 | runtime | download-bound; one DuckDB pass over ~33 M rows (not measured here) |
-| repo delta | ~502 MB of new tile blobs added to git history per refresh |
+| repo delta | ~643 MB of new tile blobs (r8 + r7) added to git history per refresh |
 
 Guard rails to re-check after the bake, all covered by `npm run verify:data`:
 
-- Largest tile stays ≪ 100 MB (today 0.27 MB at r3; `build_tiles.py` aborts at 95 MB).
-- Published site size stays under the **1 GB GitHub Pages** limit — today ~537 MB of
-  data plus the bundle, so roughly half the budget. A release that grows cell count
+- Largest tile stays ≪ 100 MB (today 0.27 MB for r8 at r3, 0.28 MB for r7 at r2;
+  `build_tiles.py` and `build_parents.py` abort at 95 MB).
+- Published site size stays under the **1 GB GitHub Pages** limit — today 684 MB of
+  data (685.5 MB built), so about two thirds of the budget. A release that grows cell count
   materially, or a shift to r4 parents (≈ 71 k files), needs the CDN/release-asset move
   in `docs/architecture.md` §6 rather than a bigger commit.
 - Σ population will change with the release; update the constants in
-  `scripts/verify_data.mjs` (`EXPECTED_SUM`, `EXPECTED_R8_CELLS`, `EXPECTED_R8_TILES`)
+  `scripts/verify_data.mjs` (`EXPECTED_SUM`, `EXPECTED_R5_CELLS`, `EXPECTED_TILED`)
   and `docs/architecture.md` §3 in the same commit, and record the old and new totals
   in `PROJECT_STATE.md`. Changing those constants to make a red run go green without
   explaining the delta is how bad data ships.

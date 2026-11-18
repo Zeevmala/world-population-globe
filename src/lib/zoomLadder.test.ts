@@ -3,15 +3,15 @@ import { MANIFEST } from '../test/fixtures'
 import { MAX_ZOOM, MIN_ZOOM } from './camera'
 import { bandsFor, cellLabel } from './zoomLadder'
 
-/** The ladder is `h-32` (128 CSS px) tall and its tier labels are 10 px text. */
-const LADDER_PX = 128
+/** The ladder is `h-40` (160 CSS px) tall and its tier labels are 10 px text. */
+const LADDER_PX = 160
 const LABEL_PX = 10
 
 describe('bandsFor (the zoom ladder)', () => {
   const bands = bandsFor(MANIFEST.lods, MIN_ZOOM, MAX_ZOOM)
 
-  it('shows all four tiers over the full −1 … 10 range, end to end', () => {
-    expect(bands.map((b) => b.label)).toEqual(['22 km', '9 km', '3 km', '400 m'])
+  it('shows all five tiers over the full −1 … 10 range, end to end', () => {
+    expect(bands.map((b) => b.label)).toEqual(['22 km', '9 km', '3 km', '1 km', '400 m'])
     expect(bands[0].from).toBe(0)
     expect(bands[bands.length - 1].to).toBe(1)
     for (let i = 1; i < bands.length; i++) expect(bands[i].from).toBeCloseTo(bands[i - 1].to, 12)
@@ -28,7 +28,7 @@ describe('bandsFor (the zoom ladder)', () => {
   it('keeps the labels apart and every band a grabbable height', () => {
     const mids = bands.map((b) => ((b.from + b.to) / 2) * LADDER_PX)
     for (let i = 1; i < mids.length; i++) expect(mids[i] - mids[i - 1]).toBeGreaterThan(2 * LABEL_PX)
-    // The narrowest band (r5, 1.4 zoom levels) is still > 14 px of rail.
+    // The narrowest band (r5 / mid / r7, 1.4 zoom levels each) is still > 14 px of rail.
     for (const b of bands) expect((b.to - b.from) * LADDER_PX).toBeGreaterThan(14)
   })
 
@@ -43,6 +43,7 @@ describe('bandsFor (the zoom ladder)', () => {
   it('labels cell sizes the way the UI prints them', () => {
     expect(cellLabel(22)).toBe('22 km')
     expect(cellLabel(8.5)).toBe('9 km')
+    expect(cellLabel(1.2)).toBe('1 km')
     expect(cellLabel(0.4)).toBe('400 m')
   })
 })

@@ -39,28 +39,36 @@ Kontur *.gpkg.gz  ──download──▶  gunzip  ──DuckDB(spatial)──�
 |---|---|---|---|---|---|
 | `overview` | r4 | 22 km | 71,283 | 1.2 MB | global hero, always loaded (zoom < 3.78) |
 | `r5` | r5 | 9 km | 393,791 | 6.4 MB | lazy whole-load, viewport-culled (3.78–5.18) — **H3-parent roll-up of `mid`** |
-| `mid` | r6 | 3 km | 2,016,971 | 31 MB | lazy whole-load, viewport-culled (5.18–7.99) |
+| `mid` | r6 | 3 km | 2,016,971 | 31 MB | lazy whole-load, viewport-culled (5.18–6.59) |
+| `r7` | r7 | 1 km | 9,012,014 | 141 MB · 2,409 tiles | **tiled by r2 parent**, streamed per-viewport (6.59–7.99) — **H3-parent roll-up of `r8`** |
 | `r8` | r8 | 400 m | 32,957,699 | 502 MB · 12,761 tiles | **tiled**, streamed per-viewport (7.99 to the zoom-10 maximum) |
 
 **Bands are cut by on-screen cell size** (decided 2026-11-18, Option A in `specs/TODO.md`):
 a tier starts where its hexagon is **3 CSS px across flats at the equator**. On deck.gl's
 GlobeView px/km at the view center = 512·2^zoom / (2π·6371·cos lat) (held to the real
 `GlobeViewport` within 1 % by `src/lib/bands.test.ts`), and an H3 hexagon of mean area A is
-√(2A/√3) across, which puts r5 at 3.78, r6 at 5.18 and r8 at 7.99. The old bands (2.2 / 4.5,
+√(2A/√3) across, which puts r5 at 3.78, r6 at 5.18, r7 at 6.59 and r8 at 7.99. The old bands (2.2 / 4.5,
 maximum zoom 7) switched each tier on ~3 zoom levels before its cells were visible — r6 cells
 0.4 px across at 2.2, r8 cells 0.3 px at 4.5 — so the 120 k cap truncated sub-pixel prisms.
 The tier table and the rule live in **one** place, `pipeline/tiers.py`; every pipeline script
 reads it and `build_parents.py` re-applies it to the whole manifest, which the client reads —
 nothing in `src/` types a band. `scripts/bands.test.mjs` pins the committed manifest to the rule.
-r5 is not a Kontur file (Kontur publishes r4, r6, r8): `pipeline/build_parents.py` rolls the
-committed r6 up to its H3 parents in DuckDB SQL (bit arithmetic, no extension) and places each
-r5 cell at its H3 center (h3ronpy) — populations are integers, so the roll-up is exact.
+r5 and r7 are not Kontur files (Kontur publishes r4, r6, r8): `pipeline/build_parents.py` rolls
+the committed r6 (r5) and the committed r8 tiles (r7) up to their H3 parents in DuckDB SQL (bit
+arithmetic, no extension) and places each cell at its H3 center (h3ronpy) — populations are
+integers and every parent sum is < 2^24, so the float32 roll-up is exact. r7 fills what was the
+widest gap in the ladder: without it an r6 cell grew from 3 px to 21 px before the 49× jump to r8.
+It is tiled like r8 (same index format, `tiles/r7/parent=<r2>/data_0.parquet`) but by **r2**
+parent: at r7's entry zoom a 1280×800 screen needs ~20 r2 tiles (r3 would need over 60), and an
+r2 tile of r7 cells is at most 0.28 MB (r2 was rejected for r8 only because r8 tiles at r2 reach
+tens of MB). The pipeline needs the r8 pyramid on disk, so the refresh order is
+`data:tiles` → `data` (`docs/data.md` §7).
 
 **Integrity check:** every tier sums to **≈ 8.03 B** (2023 world population) — r4 to
-8,031,924,025, r5/r6 and the 33 M-cell r8 pyramid to 8,031,924,024. The densest r4 cells resolve to
+8,031,924,025, r5/r6, the 9 M-cell r7 and the 33 M-cell r8 pyramids to 8,031,924,024. The densest r4 cells resolve to
 Cairo/Jakarta/Manila/Karachi/Mumbai; the Tokyo r3 tile holds 13,586 × 400 m cells (23.4 M pop).
 
-## 3b. r8 tile pyramid & streaming (`pipeline/build_tiles.py`)
+## 3b. r8 tile pyramid & streaming (`pipeline/build_tiles.py`; r7 likewise, `build_parents.py`)
 
 The 400 m tier (33 M cells) is too large to load whole, so it is **partitioned by a coarse
 H3 parent** and streamed per-viewport. Fetch granularity (coarse tiles, few files) is
@@ -169,7 +177,7 @@ src/
   `elevationScale` uniform (with `getElevation` returning normalized 0–1 density), so a zoom
   change costs one uniform write — no attribute re-upload, no re-cull.
 - **Tier hysteresis** — a tier keeps a 0.15-zoom band once on screen (`lib/lod.ts`), so a
-  camera resting on a threshold (3.78 / 5.18 / 7.99) can't oscillate and rebuild the layer every frame. The
+  camera resting on a threshold (3.78 / 5.18 / 6.59 / 7.99) can't oscillate and rebuild the layer every frame. The
   rendered tier is published to the store as `activeLod` and fed back in.
 - **Color** — Inferno (perceptually uniform). Rainbow/jet is banned (fabricates breaks).
 - **Performance budget**
@@ -178,8 +186,8 @@ src/
     (`lib/footprint.ts`), capped at 120 k cells/frame — on-screen cells first, then by
     population; cull memoized on a coarse view key that includes the canvas size (no per-tick
     recompute).
-  - r8 (33 M total): only the visible r3 tiles are fetched, merged, then viewport-culled + capped
-    at 120 k/frame — so render cost is bounded regardless of global cell count.
+  - r7 (9 M total) and r8 (33 M total): only the visible r2 / r3 tiles are fetched, merged, then
+    viewport-culled + capped at 120 k/frame — so render cost is bounded regardless of global cell count.
   - Data is **columnar typed arrays** + deck.gl non-iterable `{length}` accessors → no per-cell objects.
   - **Decoding runs in a worker** (`data/decode.worker.ts`, 2-worker pool). Measured on the
     committed data, the mid tier costs **2.44 s** of pure decode (metadata 4 ms · population
