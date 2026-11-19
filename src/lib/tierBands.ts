@@ -18,9 +18,10 @@ import { fitThreshold } from './tierFit.ts'
  *     threshold at every latitude; and
  *  2. the zoom from which its cull window cannot hold more than {@link CAP} cells, even held
  *     {@link TIER_HYSTERESIS} below the threshold with the worst zoom-bucket and Mercator-row
- *     alignment — judged from the ground the window covers ÷ the smallest H3 cell area
- *     (`tierFit.ts`). This replaces a calibrated on-screen budget: the window fits the cap
- *     by construction, whatever the data and wherever the view.
+ *     alignment — judged from the ground the window covers × the most H3 cells per area it
+ *     can meet anywhere along the latitude band (`tierFit.ts`). This replaces a calibrated
+ *     on-screen budget: the window fits the cap by construction, whatever the data and
+ *     wherever the view.
  * The latitude φ is the camera's, clamped at 85.05° like GlobeViewport's. The coarsest tier
  * (r4) has no threshold: it is the floor. Both parts rise with the resolution, so the
  * thresholds keep their order on any canvas at any latitude (`tierBands.test.ts`).
@@ -55,34 +56,65 @@ export function latitudeShift(latitude: number): number {
   return Math.log2(Math.cos((lat * Math.PI) / 180))
 }
 
-const cache = new WeakMap<readonly LodEntry[], Map<string, number[]>>()
+/**
+ * The threshold cache: per tier table, per key canvas (most recently used last), per 1°
+ * latitude band. Bounded: at most {@link CACHED_CANVASES} canvases are kept (≤ 86 bands × 5
+ * numbers each); the least recently used goes first. Selection reads one canvas at a time
+ * (`selectionCanvas.ts`), so the bound only matters across resizes.
+ */
+const cache = new WeakMap<readonly LodEntry[], Map<string, Map<number, number[]>>>()
+
+/** Canvases whose thresholds are kept. */
+export const CACHED_CANVASES = 4
 
 /** Latitude bands the window rule is cached per: 1° of |latitude| (the hemispheres mirror). */
 const bandOf = (latitude: number) => Math.min(85, Math.floor(Math.abs(Number.isFinite(latitude) ? latitude : 0)))
+
+/** This canvas's bands in the cache, made the most recently used (created, evicting the oldest, if `create`). */
+function bandsOf(lods: readonly LodEntry[], canvas: Canvas, create: boolean): Map<number, number[]> | undefined {
+  const k = keyCanvas(canvas)
+  const key = `${k.width}x${k.height}`
+  let byCanvas = cache.get(lods)
+  if (!byCanvas) cache.set(lods, (byCanvas = new Map()))
+  let bands = byCanvas.get(key)
+  if (bands) {
+    byCanvas.delete(key)
+  } else {
+    if (!create) return undefined
+    bands = new Map()
+    while (byCanvas.size >= CACHED_CANVASES) byCanvas.delete(byCanvas.keys().next().value as string)
+  }
+  byCanvas.set(key, bands)
+  return bands
+}
+
+let coldBands = 0
+/** How many threshold sets (canvas × band) have been computed so far — cold bands, for tests and benches. */
+export const coldBandCount = (): number => coldBands
 
 /**
  * Every tier's threshold for this canvas and latitude band, less the band's latitude shift
  * (index 0, the floor, is −∞), so a view at latitude ψ in the band starts tier i at
  * `t[i] + latitudeShift(ψ)`. Each is the later of the nominal band and the window fit
- * (`tierFit.ts`), the fit taken at the band's POLEWARD edge — the window at a given
- * effective scale only grows toward the pole, so every latitude in the band fits too
- * (`tierFit.test.ts` sweeps it). Cached per tier table, key canvas (16 px) and 1° band:
- * ~12 ms the first time a band is seen on a canvas (measured in Node), a map lookup after.
+ * (`tierFit.ts`), the fit taken at the band's POLEWARD edge for every view of the band — the
+ * window at a given effective scale only grows toward the pole, and the windows of all its
+ * views are weighed (`tierFit.test.ts` sweeps it). Cached per tier table, key canvas (16 px)
+ * and 1° band: ~13 ms the first time a band is seen on a canvas (measured in Node), a map
+ * lookup after.
  */
 export function bandThresholds(lods: readonly LodEntry[], canvas: Canvas, latitude: number): number[] {
-  const k = keyCanvas(canvas)
   const band = bandOf(latitude)
-  const key = `${k.width}x${k.height}:${band}`
-  let byKey = cache.get(lods)
-  if (!byKey) cache.set(lods, (byKey = new Map()))
-  let t = byKey.get(key)
+  const bands = bandsOf(lods, canvas, true)!
+  let t = bands.get(band)
   if (!t) {
+    const k = keyCanvas(canvas)
     const edge = Math.min(band + 1, MAX_LATITUDE)
     const s = latitudeShift(edge)
     t = lods.map((l, i) =>
-      i === 0 ? -Infinity : fitThreshold(l.minZoom + s, edge, cellAreaKm2(l.h3Res), CAP, TIER_HYSTERESIS, k) - s,
+      i === 0 ? -Infinity : fitThreshold(l.minZoom + s, edge, cellAreaKm2(l.h3Res), CAP, TIER_HYSTERESIS, k, edge - band) - s,
     )
-    byKey.set(key, t)
+    bands.set(band, t)
+    coldBands++
   }
   return t
 }
@@ -102,12 +134,11 @@ export function floorEntry(lods: readonly LodEntry[], i: number, latitude: numbe
  * rarely meets an empty band (~12 ms each to fill on the spot).
  */
 export function warmOneBand(lods: readonly LodEntry[], canvas: Canvas, latitude: number): boolean {
-  const k = keyCanvas(canvas)
-  const byKey = cache.get(lods)
+  const bands = bandsOf(lods, canvas, false)
   const b0 = bandOf(latitude)
   for (let d = 0; d <= 85; d++) {
     for (const b of d === 0 ? [b0] : [b0 - d, b0 + d]) {
-      if (b < 0 || b > 85 || byKey?.has(`${k.width}x${k.height}:${b}`)) continue
+      if (b < 0 || b > 85 || bands?.has(b)) continue
       bandThresholds(lods, canvas, b + 0.5)
       return true
     }

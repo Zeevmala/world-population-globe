@@ -59,9 +59,9 @@ Option A item; `src/lib/tierBands.ts`, `src/lib/tierFit.ts`). A tier starts at t
 (1) its 3-px threshold moved by log2(cos lat) — GlobeView zooms the whole globe in by 1/cos of the
 view center's latitude — and (2) the zoom from which its cull window cannot hold more than the
 120 k cap: the window's ground area (the canvas rectangle grown by the re-cull drift, cut at the
-horizon — `cullWindow` itself, area summed on an equal-area grid) ÷ the smallest H3 hexagon area
-(0.6 × the mean: cells near the icosahedron's vertices are 0.606×, and one vertex is on populated
-land at Dalian), +3 % for sampling and boundary cells, evaluated HELD 0.15 below the threshold with
+horizon — `cullWindow` itself, area summed on an equal-area grid) × the most H3 cells per mean-cell
+area such a window can meet anywhere along its latitude band, +3 % for sampling and boundary cells,
+evaluated HELD 0.15 below the threshold with
 the worst zoom-bucket and Mercator-row alignment (the row's equatorward members zoom by their own
 1/cos, so the window grows with latitude: +5 % at 35°, +35 % at 60°). The fit is by construction —
 no calibrated budget — and it is what a flat budget cannot be: at r5's threshold the limb sits in
@@ -79,6 +79,28 @@ whole-tier loader, the search's arrival zoom, the zoom ladder (which draws the b
 current view), `DataStatus`, the render harness, the QA page probe and the cull bench, whose
 `--scan` (3,408 view centres × 5 canvases × 4 tiers, threshold and held) finds no window over the
 cap.
+
+**The window is weighed by where H3's cells are small** (decided 2026-11-19, the follow-up to the
+above; `tierFit.ts` `windowWeight`). H3 lays a uniform hexagon grid on each icosahedron face's
+gnomonic plane, so a hexagon's area is 1.2066 × cos³θ × the mean, θ its centre's angle to the
+nearest of the 20 face centres (checked against h3-js `cellArea` at r5–r8 over the sphere and next
+to all 12 vertices: the ratio is 1.2066 to within 0.1 %) — 0.605 × at a vertex, 1.21 × at a face
+centre. The first cut divided every window by the smallest hexagon anywhere (0.6 × the mean); now
+each window is weighed by 1 / that floor integrated over its own ground, at the worst longitude it
+can be turned to (all 720 half-degree turns, summed exactly per raster row: on each parallel the
+window is one or two arcs of longitude) and at every place along the meridian its band's re-cull
+rows can put it (pieces ≤ 1° long; θ is widened by 1.25° for the raster cell, the turn step and the
+piece). It stays a function of canvas key and latitude band only — no longitude in the cache key, so
+no new place to flap — and a cold band costs ~13 ms in Node (p95 18, max 27; was ~12), plus a
+0.5° raster of weights filled lazily once per session (≤ 50 ms in all). It moves r5 0.22–0.25
+zoom and mid 0.11–0.13 earlier on 1280×800 and 1920×1080 (r7 0.04–0.08, r8 0.01–0.07: their windows
+are small enough to sit next to a vertex). `scripts/bench/h3_window_count.mjs` counts real H3 cells
+in the worst windows at every vertex, face centre and a 10° grid on five canvases: ≤ 93.5 % of the
+cap. Tightening the re-cull drift margin was weighed and not taken: halving the pan step wins
+0.07–0.14 zoom and doubles the re-culls (and tile re-selections) per pan. While a window is being
+dragged, selection reads a canvas that covers the real one with headroom (`selectionCanvas.ts`)
+until 250 ms after the last resize, so a drag computes thresholds for a handful of canvases, not
+one per 16 px; the threshold cache keeps the last four canvases.
 
 **Integrity check:** every tier sums to **≈ 8.03 B** (2023 world population) — r4 to
 8,031,924,025, r5/r6, the 9 M-cell r7 and the 33 M-cell r8 pyramids to 8,031,924,024. The densest r4 cells resolve to

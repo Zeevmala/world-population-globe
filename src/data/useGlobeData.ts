@@ -21,18 +21,21 @@ export function useGlobeData(): void {
   // The plan as a primitive (tier names), so this hook's host re-renders when the plan
   // changes, not on every camera frame.
   const plan = useGlobeStore((s) =>
-    wholeTiersFor(planView(s.viewState, s.flyTarget), s.canvas, s.manifest, s.data)
+    wholeTiersFor(planView(s.viewState, s.flyTarget), s.selectionCanvas, s.manifest, s.data)
       .map((l) => l.lod)
       .join(','),
   )
   const requested = useRef<Set<string>>(new Set())
-  const canvas = useGlobeStore((s) => s.canvas)
+  // Selection's canvas (`selectionCanvas.ts`): changes when a resize settles, not per frame.
+  const canvas = useGlobeStore((s) => s.selectionCanvas)
+  const settled = useGlobeStore((s) => s.selectionCanvas.width === s.canvas.width && s.selectionCanvas.height === s.canvas.height)
 
   // Fill the tier-threshold cache (`tierBands.ts`: one window search per canvas key and 1°
   // latitude band, ~12 ms each) in idle time, nearest the camera's latitude first, so a pan
-  // across latitudes rarely pays for a band on the spot. Restarts when the canvas changes.
+  // across latitudes rarely pays for a band on the spot. Restarts when selection's canvas
+  // changes — not during a window drag, where it is a coarse canvas held until the drag stops.
   useEffect(() => {
-    if (!manifest) return
+    if (!manifest || !settled) return
     const w = globalThis as {
       requestIdleCallback?: (cb: () => void) => number
       cancelIdleCallback?: (id: number) => void
@@ -50,7 +53,7 @@ export function useGlobeData(): void {
       if (w.cancelIdleCallback) w.cancelIdleCallback(id)
       else clearTimeout(id)
     }
-  }, [manifest, canvas])
+  }, [manifest, canvas, settled])
 
   useEffect(() => {
     let alive = true

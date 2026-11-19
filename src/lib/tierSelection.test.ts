@@ -61,15 +61,15 @@ describe('selectActive while a tiled tier streams (Accept c)', () => {
 
   it('zooming out of r8 into r6 before r6 has loaded: the finest loaded tier at or below r6', () => {
     const set = settledFor('r8', 3, TOKYO)
-    // r8 starts at 8.65 over Tokyo on 1280×800 (`tierBands.ts`: where its cull window fits
-    // the cap, moved −0.30 for the latitude), so its hysteresis ends at 8.50.
+    // r8 starts at 8.59 over Tokyo on 1280×800 (`tierBands.ts`: where its cull window fits
+    // the cap, moved −0.30 for the latitude), so its hysteresis ends at 8.44.
     const r8Here = tierEntry(MANIFEST.lods, MANIFEST.lods.length - 1, TOKYO.latitude, CANVAS)
-    expect(r8Here).toBeCloseTo(8.65, 2)
+    expect(r8Here).toBeCloseTo(8.59, 2)
     const out = view(TOKYO.longitude, TOKYO.latitude, 7.5) // past r8's hysteresis
     expect(tierOf(out, { overview }, { r8: set }, 'r8')).toBe('overview')
     expect(tierOf(out, { overview, r5 }, { r8: set }, 'r8')).toBe('r5')
     expect(tierOf(out, { overview, r5, mid }, { r8: set }, 'r8')).toBe('mid')
-    // Inside r8's hysteresis band (8.50–8.65 here) r8 holds only with tiles for the wider
+    // Inside r8's hysteresis band (8.44–8.59 here) r8 holds only with tiles for the wider
     // screen: those merged at zoom 9.6 cover a fraction of its width, so mid draws until the
     // held view's key's tiles merge.
     const held = view(TOKYO.longitude, TOKYO.latitude, r8Here - 0.1)

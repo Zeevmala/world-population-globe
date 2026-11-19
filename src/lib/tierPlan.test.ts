@@ -200,7 +200,7 @@ describe('arrivalZoom', () => {
     const r8 = lods.find((l) => l.lod === 'r8')!
     expect(arrivalZoom(MANIFEST)).toBeCloseTo(r8.minZoom + 0.5, 9) // no canvas yet: the nominal bands
     expect(arrivalZoom(MANIFEST, 0, HARNESS)).toBeCloseTo(entryOf('r8', 0, HARNESS) + 0.5, 9)
-    expect(arrivalZoom(MANIFEST, 0, HARNESS)).toBeCloseTo(8.95, 2)
+    expect(arrivalZoom(MANIFEST, 0, HARNESS)).toBeCloseTo(8.94, 2)
     expect(arrivalZoom(MANIFEST, 0, C1920)).toBeCloseTo(entryOf('r8', 0, C1920) + 0.5, 9)
     expect(arrivalZoom(MANIFEST, 60, HARNESS)).toBeCloseTo(entryOf('r8', 60, HARNESS) + 0.5, 9)
     expect(arrivalZoom(MANIFEST, 0, { width: 3840, height: 2160 })).toBe(MAX_ZOOM)

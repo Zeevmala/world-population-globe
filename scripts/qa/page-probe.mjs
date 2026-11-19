@@ -74,7 +74,7 @@ export function readAppState() {
       // nominal bands, which the app no longer selects by.
       let chosen = null
       const select = window.__globeTiers
-      const wanted = select ? select.wantedIndex(state.viewState, state.canvas, manifest.lods) : manifest.lods.length - 1
+      const wanted = select ? select.wantedIndex(state.viewState, state.selectionCanvas ?? state.canvas, manifest.lods) : manifest.lods.length - 1
       manifest.lods.forEach((entry, i) => {
         if (i <= wanted && state.data[entry.lod]) chosen = entry.lod
       })

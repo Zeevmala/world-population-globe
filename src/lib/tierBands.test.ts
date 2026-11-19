@@ -9,9 +9,11 @@ import { cullForView, cullKeyFor } from './lod'
 import { hexWidthKm, pxPerKm, zoomForHexPx } from './screenScale'
 import {
   BAND_PX,
+  CACHED_CANVASES,
   CAP,
   TIER_HYSTERESIS,
   bandThresholds,
+  coldBandCount,
   effectiveBands,
   floorEntry,
   latitudeShift,
@@ -38,27 +40,43 @@ const WIDE: Canvas = { width: 2560, height: 1080 }
 const DEG = Math.PI / 180
 
 /**
- * Accept (b), amended: every tier's threshold for the five canvases at lat 0 / 35.68 / 60, in
- * zoom and in cell px across at the view center. Each is the later of the 3-px rule moved by
- * latitude and the zoom from which the tier's cull window cannot hold more than 120 k cells
- * (held 0.15 below, worst bucket alignment, cells 0.6 × the mean H3 area — `tierFit.ts`).
+ * Every tier's threshold for the five canvases at lat 0 / 35.68 / 60, in zoom and in cell px
+ * across at the view center. Each is the later of the 3-px rule moved by latitude and the zoom
+ * from which the tier's cull window cannot hold more than 120 k cells (held 0.15 below, worst
+ * bucket alignment, cells as small as H3 makes them anywhere a window of the latitude band can
+ * sit — `tierFit.ts`). Before the window was weighed by where H3's cells are small (the
+ * uniform 0.6 × mean floor), the same table read — 900×560: r5 4.42 (4.7), mid 5.69 (4.3),
+ * r7 7.06 (4.2), r8 8.45 (4.1) at the equator; 1280×800: 4.91 / 6.19 / 7.56 / 8.95 at the
+ * equator, 4.66 / 5.91 / 7.27 / 8.65 at 35.68°, 4.06 / 5.26 / 6.58 / 7.96 at 60°; 1920×1080:
+ * 5.44 / 6.71 / 8.06 / 9.45, 5.19 / 6.43 / 7.77 / 9.16, 4.58 / 5.77 / 7.09 / 8.47 — so r5 now
+ * starts 0.22–0.25 zoom earlier on 1280×800 and 1920×1080 and mid 0.11–0.13 (`EARLIER`).
  */
 const TABLE: [Canvas, number, [number, number][]][] = [
-  [HARNESS, 0, [[4.42, 4.7], [5.69, 4.3], [7.06, 4.2], [8.45, 4.1]]],
-  [HARNESS, 35.68, [[4.17, 4.8], [5.42, 4.3], [6.77, 4.2], [8.16, 4.1]]],
-  [HARNESS, 60, [[3.57, 5.2], [4.76, 4.5], [6.09, 4.2], [7.46, 4.2]]],
-  [C1280, 0, [[4.91, 6.6], [6.19, 6.0], [7.56, 5.9], [8.95, 5.8]]],
-  [C1280, 35.68, [[4.66, 6.8], [5.91, 6.1], [7.27, 5.9], [8.65, 5.8]]],
-  [C1280, 60, [[4.06, 7.3], [5.26, 6.3], [6.58, 6.0], [7.96, 5.9]]],
-  [C1920, 0, [[5.44, 9.5], [6.71, 8.6], [8.06, 8.3], [9.45, 8.3]]],
-  [C1920, 35.68, [[5.19, 9.8], [6.43, 8.8], [7.77, 8.4], [9.16, 8.3]]],
-  [C1920, 60, [[4.58, 10.4], [5.77, 9.0], [7.09, 8.5], [8.47, 8.3]]],
-  [PHONE, 0, [[3.98, 3.4], [5.3, 3.3], [6.68, 3.2], [8.07, 3.2]]],
-  [PHONE, 35.68, [[3.73, 3.6], [5.02, 3.3], [6.39, 3.2], [7.77, 3.2]]],
-  [PHONE, 60, [[3.12, 3.8], [4.36, 3.4], [5.71, 3.3], [7.08, 3.2]]],
-  [WIDE, 0, [[5.73, 11.6], [6.92, 10.0], [8.27, 9.6], [9.65, 9.5]]],
-  [WIDE, 35.68, [[5.47, 12.0], [6.64, 10.1], [7.97, 9.7], [9.35, 9.5]]],
-  [WIDE, 60, [[4.85, 12.6], [5.98, 10.4], [7.29, 9.8], [8.66, 9.5]]],
+  [HARNESS, 0, [[4.17, 3.9], [5.58, 4], [7.02, 4.1], [8.44, 4.1]]],
+  [HARNESS, 35.68, [[3.93, 4.1], [5.29, 4], [6.7, 4], [8.1, 4]]],
+  [HARNESS, 60, [[3.34, 4.4], [4.64, 4.1], [6.01, 4], [7.39, 4]]],
+  [C1280, 0, [[4.66, 5.5], [6.08, 5.6], [7.52, 5.7], [8.94, 5.8]]],
+  [C1280, 35.68, [[4.42, 5.8], [5.79, 5.6], [7.2, 5.6], [8.59, 5.6]]],
+  [C1280, 60, [[3.83, 6.2], [5.13, 5.8], [6.51, 5.7], [7.89, 5.6]]],
+  [C1920, 0, [[5.2, 8], [6.58, 7.9], [8.02, 8.1], [9.44, 8.2]]],
+  [C1920, 35.68, [[4.95, 8.3], [6.3, 8], [7.7, 8], [9.1, 8]]],
+  [C1920, 60, [[4.36, 9], [5.64, 8.3], [7.01, 8.1], [8.39, 7.9]]],
+  [PHONE, 0, [[3.78, 3], [5.18, 3], [6.64, 3.1], [8.05, 3.1]]],
+  [PHONE, 35.68, [[3.48, 3], [4.9, 3], [6.33, 3.1], [7.72, 3.1]]],
+  [PHONE, 60, [[2.88, 3.2], [4.24, 3.1], [5.63, 3.1], [7.02, 3.1]]],
+  [WIDE, 0, [[5.56, 10.3], [6.8, 9.2], [8.22, 9.3], [9.64, 9.4]]],
+  [WIDE, 35.68, [[5.3, 10.6], [6.5, 9.2], [7.9, 9.2], [9.29, 9.1]]],
+  [WIDE, 60, [[4.7, 11.3], [5.84, 9.5], [7.21, 9.2], [8.59, 9.1]]],
+]
+
+/** The thresholds before the window was weighed (uniform 0.6 floor), r5 and mid, on the two desktop canvases. */
+const EARLIER: [Canvas, number, number, number][] = [
+  [C1280, 0, 4.91, 6.19],
+  [C1280, 35.68, 4.66, 5.91],
+  [C1280, 60, 4.06, 5.26],
+  [C1920, 0, 5.44, 6.71],
+  [C1920, 35.68, 5.19, 6.43],
+  [C1920, 60, 4.58, 5.77],
 ]
 
 describe('(b) the thresholds: the 3-px rule, unless the window rule starts a tier later', () => {
@@ -86,18 +104,31 @@ describe('(b) the thresholds: the 3-px rule, unless the window rule starts a tie
       const cell = cellAreaKm2(lods[i].h3Res)
       // At the band's edge the same effective threshold: held 0.15 below it, the widest window fits…
       const atEdge = z - latitudeShift(lat) + latitudeShift(edge)
-      expect(maxWindowCells(atEdge - TIER_HYSTERESIS, edge, canvas, cell)).toBeLessThanOrEqual(CAP)
+      const band = edge - Math.floor(lat) // the views it holds for: the whole 1° band below the edge
+      expect(maxWindowCells(atEdge - TIER_HYSTERESIS, edge, canvas, cell, band)).toBeLessThanOrEqual(CAP)
       // …and unless the 3-px rule decided, 1/64 zoom earlier it would not.
-      if (z > floor + 1e-9) expect(maxWindowCells(atEdge - TIER_HYSTERESIS - 1 / 64, edge, canvas, cell)).toBeGreaterThan(CAP)
+      if (z > floor + 1e-9) expect(maxWindowCells(atEdge - TIER_HYSTERESIS - 1 / 64, edge, canvas, cell, band)).toBeGreaterThan(CAP)
     }
   })
 
-  it('selection is the manifest’s nominal bands where neither rule moves them: the equator on canvases up to 360×640', () => {
-    for (const canvas of [{ width: 320, height: 568 }, { width: 360, height: 640 }, { width: 0, height: 0 }]) {
+  it.each(EARLIER)('%o at lat %d: r5 starts ≥ 0.2 zoom and mid ≥ 0.1 zoom earlier than with the uniform floor', (canvas, lat, r5, mid) => {
+    expect(r5 - entryOf('r5', lat, canvas)).toBeGreaterThanOrEqual(0.2)
+    expect(mid - entryOf('mid', lat, canvas)).toBeGreaterThanOrEqual(0.1)
+  })
+
+  it('selection is the manifest’s nominal bands where neither rule moves them: the equator on canvases up to 400×700', () => {
+    for (const canvas of [
+      { width: 320, height: 568 },
+      { width: 360, height: 640 },
+      { width: 375, height: 667 },
+      { width: 400, height: 700 },
+      { width: 0, height: 0 },
+    ]) {
       for (let i = 1; i < lods.length; i++) expect(tierEntry(lods, i, 0, canvas)).toBe(lods[i].minZoom)
     }
-    // From 375×667 up, r5's window binds first; on the render harness's 900×560 every tier is later.
-    expect(tierEntry(lods, 1, 0, { width: 375, height: 667 })).toBeGreaterThan(lods[1].minZoom)
+    // (With the uniform cell-area floor the window bound from 375×667.) From 390×844 up the
+    // finer tiers' windows bind; on the render harness's 900×560 every tier is later.
+    expect(tierEntry(lods, 4, 0, { width: 390, height: 844 })).toBeGreaterThan(lods[4].minZoom)
     for (let i = 1; i < lods.length; i++) expect(tierEntry(lods, i, 0, HARNESS)).toBeGreaterThan(lods[i].minZoom)
   })
 })
@@ -122,14 +153,16 @@ describe('(a) latitude and canvas move the thresholds the way the model says', (
   it('where the window rule decides, latitude moves the threshold down overall, stepping up < 0.15 at 1° band edges', () => {
     // The window rule is measured once per 1° band at its poleward edge, so within a band the
     // threshold falls smoothly with log2(cos φ) and at each band edge steps up by the band's
-    // growth: ≤ 0.01 zoom to 60°, ≤ 0.03 to 80°, ≤ 0.08 at 84° — always under the 0.15
-    // hysteresis, so a view parked on a band edge cannot flap (tested below).
+    // growth — the window's, and the weight of the smallest cells it can meet, which grows
+    // where a band edge brings an icosahedron vertex's latitude closer: ≤ 0.03 zoom to 80°,
+    // ≤ 0.09 at 84° — always under the 0.15 hysteresis, so a view parked on a band edge cannot
+    // flap (tested below).
     for (const canvas of [HARNESS, C1280, C1920, PHONE, WIDE]) {
       for (let i = 1; i < lods.length; i++) {
         let prev = tierEntry(lods, i, 0, canvas)
         for (let lat = 0.05; lat <= 85; lat += 0.05) {
           const t = tierEntry(lods, i, lat, canvas)
-          expect(t - prev).toBeLessThan(lat <= 60 ? 0.011 : lat <= 80 ? 0.032 : 0.09)
+          expect(t - prev).toBeLessThan(lat <= 80 ? 0.032 : 0.09)
           prev = t
         }
         expect(tierEntry(lods, i, 60, canvas)).toBeLessThan(tierEntry(lods, i, 8, canvas) - 0.5)
@@ -210,6 +243,23 @@ describe('order, floor and extremes', () => {
     expect(bandThresholds(lods, { width: 1265, height: 785 }, 20)).toBe(bandThresholds(lods, C1280, 20))
     expect(keyCanvas({ width: 1265, height: 785 })).toEqual(C1280)
   })
+
+  it('the cache is bounded: the last CACHED_CANVASES canvases used are kept, the oldest goes first', () => {
+    const lat = 12.5
+    const canvases = Array.from({ length: CACHED_CANVASES + 2 }, (_, k) => ({ width: 640 + 16 * k, height: 480 }))
+    for (const c of canvases) bandThresholds(lods, c, lat)
+    const n = coldBandCount()
+    for (const c of canvases.slice(-CACHED_CANVASES)) bandThresholds(lods, c, lat)
+    expect(coldBandCount()).toBe(n) // still there
+    bandThresholds(lods, canvases[0], lat)
+    expect(coldBandCount()).toBe(n + 1) // evicted, computed again
+    // Reading a canvas makes it the most recent: it survives the next new one.
+    bandThresholds(lods, canvases[canvases.length - 1], lat)
+    bandThresholds(lods, { width: 2000, height: 480 }, lat)
+    const m = coldBandCount()
+    bandThresholds(lods, canvases[canvases.length - 1], lat)
+    expect(coldBandCount()).toBe(m)
+  })
 })
 
 describe('(c) no flapping at a threshold — in zoom, latitude, canvas, or all three', () => {
@@ -253,6 +303,28 @@ describe('(c) no flapping at a threshold — in zoom, latitude, canvas, or all t
       }
     }
   }, 60_000)
+
+  it('parked on ANY 1° band edge (where the cache cell changes), at each tier’s threshold either side of it: no flapping', () => {
+    // The weight of the smallest cells a window can meet changes with the band (an
+    // icosahedron vertex's latitude coming closer), so every band edge is a step of its own
+    // (≤ 0.09 zoom, tested above): parked on each, in both hemispheres, at the threshold just
+    // equatorward and just poleward of it, latitude jitter changes the tier at most once.
+    let parks = 0
+    for (const canvas of [HARNESS, C1280, C1920, PHONE, WIDE]) {
+      for (const lod of ['r5', 'mid', 'r7', 'r8']) {
+        for (let edge = 1; edge <= 85; edge++) {
+          for (const sign of [1, -1]) {
+            for (const z0 of [entryOf(lod, edge - 1e-6, canvas), entryOf(lod, edge, canvas)]) {
+              const seen = park((t) => ({ lat: sign * (edge + jitter(t, 0.05)), zoom: z0, canvas }), 60)
+              expect(seen.length, `${canvas.width}×${canvas.height} ${lod} edge ${sign * edge}`).toBeLessThanOrEqual(2)
+              parks++
+            }
+          }
+        }
+      }
+    }
+    expect(parks).toBe(5 * 4 * 85 * 4)
+  }, 120_000)
 
   it('a deliberate move past the hysteresis still switches — in either direction, by any of the three', () => {
     const z0 = entryOf('mid', 0, C1280)

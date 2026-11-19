@@ -21,7 +21,7 @@ React 19 + TypeScript (strict) + Vite + Tailwind v4 · deck.gl 9 · Zustand · h
 | Command | Role |
 |---|---|
 | `npm run verify` | **The verifier** — `eslint .` → `vitest run` → `tsc -b && vite build`; exit 0 = green |
-| `npm test` | Unit tests (vitest, plain Node, < 2 s) over the pure render logic — LOD + cull, density, scales, tiles, H3 column, deep-links |
+| `npm test` | Unit tests (vitest, plain Node, ~20 s) over the pure render logic — LOD + cull, tier selection + the cap bound, density, scales, tiles, H3 column, deep-links |
 | `npm run gate` | **The factory gate** — path-scoped: queue lint + `verify` always; `qa:render --quick` if the browser loads what changed; `verify:data` if pipeline/data changed; every changed file < 100 MB |
 | `npm run queue -- <status\|next\|lint>` | The one parser of `specs/TODO.md` (first unchecked item, blocked state, format) |
 | `npm run verify:live [url]` | Post-deploy E2E — fetch + parse the deployed manifest/tiers/tile, Σ-pop check |

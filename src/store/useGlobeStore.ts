@@ -4,6 +4,7 @@ import type { Canvas } from '../lib/footprint'
 import { MAX_ZOOM, MIN_ZOOM, wrapLng } from '../lib/camera'
 import { wantedIndex } from '../lib/tierBands'
 import { arrivalZoom } from '../lib/tierPlan'
+import { SETTLE_MS, resizingCanvas } from '../lib/selectionCanvas'
 import { parseHash } from '../lib/urlState'
 import { prefersReducedMotion } from '../lib/useReducedMotion'
 
@@ -72,6 +73,12 @@ interface GlobeStore {
    * current by deck.gl's `onResize`.
    */
   canvas: Canvas
+  /**
+   * The canvas tier selection reads (`lib/selectionCanvas.ts`): the real one once it has not
+   * changed for SETTLE_MS; while a window is being resized, a coarse canvas covering it, so a
+   * drag computes new tier thresholds a handful of times instead of on every 16 px.
+   */
+  selectionCanvas: Canvas
 
   setManifest: (m: Manifest) => void
   addData: (d: LodData) => void
@@ -92,7 +99,10 @@ interface GlobeStore {
   setAutoRotate: (on: boolean) => void
 }
 
-export const useGlobeStore = create<GlobeStore>((set) => ({
+/** Pending switch of `selectionCanvas` back to the real canvas once resizing stops. */
+let settle: ReturnType<typeof setTimeout> | undefined
+
+export const useGlobeStore = create<GlobeStore>((set, get) => ({
   manifest: null,
   data: {},
   tiles: {},
@@ -107,6 +117,7 @@ export const useGlobeStore = create<GlobeStore>((set) => ({
   flyTarget: null,
   activeLod: null,
   canvas: { width: window.innerWidth, height: window.innerHeight },
+  selectionCanvas: { width: window.innerWidth, height: window.innerHeight },
 
   setManifest: (manifest) => set({ manifest }),
   addData: (d) => set((s) => ({ data: { ...s.data, [d.lod]: d } })),
@@ -122,10 +133,18 @@ export const useGlobeStore = create<GlobeStore>((set) => ({
   // re-enter when the tier is unchanged.
   setActiveLod: (lod) => set((s) => (s.activeLod === lod ? s : { activeLod: lod })),
   // Same guard: deck.gl reports a size on every resize check, the cull re-runs only on a change.
-  setCanvas: (width, height) =>
-    set((s) =>
-      s.canvas.width === width && s.canvas.height === height ? s : { canvas: { width, height } },
-    ),
+  // Selection moves to a coarse covering canvas at once and to the real one when resizing stops.
+  setCanvas: (width, height) => {
+    const s = get()
+    if (s.canvas.width === width && s.canvas.height === height) return
+    const canvas = { width, height }
+    set({ canvas, selectionCanvas: resizingCanvas(s.selectionCanvas, canvas) })
+    clearTimeout(settle)
+    settle = setTimeout(() => {
+      const { canvas: real, selectionCanvas: sel } = get()
+      if (sel.width !== real.width || sel.height !== real.height) set({ selectionCanvas: real })
+    }, SETTLE_MS)
+  },
   rotateBy: (deg) =>
     set((s) => ({
       viewState: { ...s.viewState, longitude: wrapLng(s.viewState.longitude + deg) },
@@ -159,7 +178,7 @@ export const useGlobeStore = create<GlobeStore>((set) => ({
       flyTarget: {
         longitude: lng,
         latitude: lat,
-        zoom: zoom ?? Math.min(MAX_ZOOM, Math.max(s.viewState.zoom, arrivalZoom(s.manifest, lat, s.canvas))),
+        zoom: zoom ?? Math.min(MAX_ZOOM, Math.max(s.viewState.zoom, arrivalZoom(s.manifest, lat, s.selectionCanvas))),
         id: Date.now(),
       },
     })),

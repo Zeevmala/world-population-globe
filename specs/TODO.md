@@ -39,42 +39,10 @@ REPORT  : evidence in the Done note + commit body; sprint summary → PROJECT_ST
 
 ## Queue
 
-Option A (decided 2026-11-18, see **Backlog**) is done — its five items are under
-**Done**. First here is the follow-up it left: the cap rule is safe but coarse on a
-desktop canvas. The two items after it each wait on something outside the session.
+Option A (decided 2026-11-18, see **Backlog**) is done — its five items and the
+follow-up that tightened the cap rule (tick 13) are under **Done**. The two items left
+here each wait on something outside the session: a texture file, and a pull request.
 
-- [ ] Win back the detail the cap rule gives away: tick 12 starts each tier where its cull
-      window cannot hold more than the cap even if every cell in it were populated and as
-      small as the smallest H3 hexagon anywhere (0.6 × the mean area). That is safe — the
-      fullest real window is 93 % of the cap and the committed data peaks at 65 % — but
-      coarse on a desktop: on 1920×1080 at the equator r5 starts at zoom 5.44 with cells
-      9.5 px across, and r4 cells reach ~23 px before it does (r8 only from 9.45); on
-      1280×800 tiers start about one zoom later than the 3-px rule. Measured costs: the
-      uniform 0.6 area floor 0.28–0.37 zoom; judging the fit 0.15 below the threshold
-      0.15; the drift margin, zoom bucket and canvas-key rounding ~0.35; ~0.57 on 1920×1080
-      is unavoidable under a 120 k cap. Recover what can be recovered without giving up
-      the guarantee: (1) a floor that knows where the window is — H3's area distortion is
-      a smooth function of the angular distance to the nearest icosahedron face center, so
-      the smallest cell a given window can contain is computable without h3-js — or at
-      least a per-resolution floor measured over window-sized regions (the checker's
-      estimate: +0.32 zoom at r5, 0.15 at mid, 0.08 at r7, 0.05 at r8); (2) a tighter drift
-      margin where re-culls are cheap — say what halving the pan step costs in re-culls
-      per pan and wins in zoom. Also from the review: a window drag crosses a new 16-px
-      canvas key every 16 px and each computes cold thresholds synchronously (~12–25 ms a
-      step, ~40 hitches from 1280 to 1920 px wide) while the idle warmer restarts for every
-      transient size — debounce the canvas that SELECTION uses, and bound the threshold
-      cache.
-      Accept: (a) `node scripts/bench/cull_coverage.mjs --scan` still reports 0 windows
-      over the cap and 0 on-screen cells missing, and a Node check kept under
-      `scripts/bench/` that counts REAL H3 cells in worst-case windows (every tier, the
-      five canvases, next to each icosahedron vertex) stays ≤ the cap; (b) the threshold
-      table for 900×560, 1280×800, 1920×1080, 375×812 and 2560×1080 at lat 0 / 35.68 / 60
-      is reported before and after, each tier starting earlier by at least 0.2 zoom at r5
-      and 0.1 at mid on 1280×800 and 1920×1080 — or a stated reason the geometry does not
-      allow it; (c) the existing jitter tests still find no flapping, including at any new
-      cache-cell edge; (d) a 1 px-step drag from 1280 to 1920 px wide computes thresholds
-      for at most a handful of canvas sizes; (e) the entry chunk's size before and after.
-      Gate: verify, qa:render.
 - [ ] Night-lights basemap toggle: swap the dark-ocean sphere texture for NASA Black Marble
       (public domain) behind a `Controls.tsx` toggle; columns must stay legible
       (data > basemap).
@@ -110,10 +78,36 @@ desktop canvas. The two items after it each wait on something outside the sessio
   on-screen size and the cull window guaranteed to fit the cap (ticks 8–12), the cap is
   now what limits detail on a big screen: 1920×1080 cannot show cells finer than ~4.5 px
   across even with a perfect fit and no margin, and with the margins the guarantee needs,
-  cells are 8–10 px at a tier's entry. The queue item above recovers what the bound gives
-  away; beyond that, finer cells on desktop mean a higher cap. The cap was set when tiers
+  cells are 8–10 px at a tier's entry. Tick 13 recovered what the bound could give back
+  without a longitude key (r5 0.22–0.25 zoom earlier on desktop, mid 0.11–0.13, r7/r8
+  under 0.1; 1920×1080 at the equator now enters r5 at 5.20 with 8.0 px cells and r8 at
+  9.44); beyond that, finer cells on desktop mean a higher cap. The cap was set when tiers
   drew sub-pixel prisms, and nothing since has been measured on a real GPU — a decision
   needs frame times at 120 k, 200 k and 300 k extruded cells on real hardware.
+- (candidate, from tick 13's review — needs an owner go-ahead and a breakdown) Thresholds
+  that know the longitude too. Tick 13 keeps a tier's threshold a function of canvas and
+  latitude band by taking the worst longitude in the band, so every place pays for the
+  icosahedron vertex nearest its latitude. Measured on 1280×800, weighing the window at
+  the actual place instead would start r7 and r8 0.13–0.35 zoom earlier at typical cities
+  (Tokyo 0.21 / 0.23, Delhi 0.27 / 0.28, New York 0.31 / 0.33, São Paulo 0.33 / 0.35,
+  Lagos 0.13 / 0.13, Dalian — next to a vertex — 0), mid 0.06–0.29, r5 under 0.07 (its
+  window is tens of degrees wide and averages the vertices out). Cost: a cache keyed
+  latitude × longitude (86 × 72 cells at 5°, ~13 ms each cold, far more cold cells per
+  pan than today), a second flap edge in longitude needing its own step-below-hysteresis
+  proof, and placement handling for windows that straddle cells. The checker's view:
+  worth it for r7/r8 only with coarse (~10°) cells warmed in idle time; not for r5.
+- (small, from tick 13's review) `selectionCanvas.ts` `covers`: its docstring says a
+  covering canvas's thresholds are never earlier; that holds only to within the search
+  tolerance (one fuzzed pair, 1471×257 over 1126×263 at lat 70.86, is earlier by 0.00789
+  zoom against a 1/128 tolerance — real cells there peak at 90.4 % of the cap, so the
+  guarantee is not touched; the wording and the zero-tolerance test are). Say that
+  `prefixRows` in `tierFit.ts` is bounded by construction (360 rows × 11.5 kB). Trim the
+  unit suite: `npm test` went ~12 s → ~22 s; the monotonicity sweep can step 0.1 instead
+  of 0.05 and the area-model test needs ~5 k cells per resolution, not 850 k in all.
+- (to look at on a real machine) While a window is being resized, selection reads a canvas
+  up to 1.25× larger than the real one, so a view just past a threshold can drop to the
+  coarser tier during the drag and return ~250 ms after it stops. Cheap to change if it
+  reads as a flicker: shorten `SETTLE_MS`, lower `GROW`, or hold the tier during a drag.
 - **DECIDED 2026-11-18 — Option A: band the LOD tiers by on-screen cell size.** Measured
   against deck.gl 9.3's real `GlobeViewport` (1280×800, CSS px), each tier switched on ~3
   zoom levels before its cells were visible: an r6 hexagon was 0.38–0.47 px across at the
@@ -841,3 +835,90 @@ desktop canvas. The two items after it each wait on something outside the sessio
       unbounded (~100 B per entry); the entry chunk grew 220.42 → 226.49 kB (footprint and
       fit model; no deck.gl or h3-js). Not verified: any of this on a real GPU, and the
       idle warming in a browser.)*
+- [x] Win back the detail the cap rule gives away: tick 12 starts each tier where its cull
+      window cannot hold more than the cap even if every cell in it were populated and as
+      small as the smallest H3 hexagon anywhere (0.6 × the mean area). That is safe — the
+      fullest real window is 93 % of the cap and the committed data peaks at 65 % — but
+      coarse on a desktop: on 1920×1080 at the equator r5 starts at zoom 5.44 with cells
+      9.5 px across, and r4 cells reach ~23 px before it does (r8 only from 9.45); on
+      1280×800 tiers start about one zoom later than the 3-px rule. Measured costs: the
+      uniform 0.6 area floor 0.28–0.37 zoom; judging the fit 0.15 below the threshold
+      0.15; the drift margin, zoom bucket and canvas-key rounding ~0.35; ~0.57 on 1920×1080
+      is unavoidable under a 120 k cap. Recover what can be recovered without giving up
+      the guarantee: (1) a floor that knows where the window is — H3's area distortion is
+      a smooth function of the angular distance to the nearest icosahedron face center, so
+      the smallest cell a given window can contain is computable without h3-js — or at
+      least a per-resolution floor measured over window-sized regions (the checker's
+      estimate: +0.32 zoom at r5, 0.15 at mid, 0.08 at r7, 0.05 at r8); (2) a tighter drift
+      margin where re-culls are cheap — say what halving the pan step costs in re-culls
+      per pan and wins in zoom. Also from the review: a window drag crosses a new 16-px
+      canvas key every 16 px and each computes cold thresholds synchronously (~12–25 ms a
+      step, ~40 hitches from 1280 to 1920 px wide) while the idle warmer restarts for every
+      transient size — debounce the canvas that SELECTION uses, and bound the threshold
+      cache.
+      Accept: (a) `node scripts/bench/cull_coverage.mjs --scan` still reports 0 windows
+      over the cap and 0 on-screen cells missing, and a Node check kept under
+      `scripts/bench/` that counts REAL H3 cells in worst-case windows (every tier, the
+      five canvases, next to each icosahedron vertex) stays ≤ the cap; (b) the threshold
+      table for 900×560, 1280×800, 1920×1080, 375×812 and 2560×1080 at lat 0 / 35.68 / 60
+      is reported before and after, each tier starting earlier by at least 0.2 zoom at r5
+      and 0.1 at mid on 1280×800 and 1920×1080 — or a stated reason the geometry does not
+      allow it; (c) the existing jitter tests still find no flapping, including at any new
+      cache-cell edge; (d) a 1 px-step drag from 1280 to 1920 px wide computes thresholds
+      for at most a handful of canvas sizes; (e) the entry chunk's size before and after.
+      Gate: verify, qa:render.
+      *(Done 2026-11-19, factory tick 13. What shipped: the cell-count bound in
+      `src/lib/tierFit.ts` no longer divides every window by the smallest hexagon anywhere.
+      H3 lays a uniform grid on each icosahedron face's gnomonic plane, so a hexagon's area
+      is 1.2066 · cos³θ × the resolution's mean, θ the angle to the nearest of the 20 face
+      centres (inlined; no h3-js in the entry chunk) — 0.605 at a vertex, 1.21 at a face
+      centre. A window is weighed by the most cells per area it can meet at any longitude
+      (720 half-degree turns, exact arc-by-arc on a 0.5° raster) and at every position its
+      re-cull row can take along the latitude band, so thresholds still depend on canvas
+      and latitude band alone. Lever (2), the drift margin, was measured and left: halving
+      the pan step wins 0.07–0.14 zoom for twice the re-culls and tile re-selections per
+      pan (9.6 → 19.2 per 1280 px on 1280×800); halving the zoom step wins 0.03. Tier
+      selection now reads a debounced canvas (`src/lib/selectionCanvas.ts`, store field
+      `selectionCanvas`): during a resize, the canvas it already had while that covers the
+      real one, else one 1.25× larger; the real canvas again 250 ms after the last resize.
+      The cull and tile selection still follow the real canvas. The threshold cache keeps
+      the four most recently used canvases.
+      Thresholds (zoom; cell px at entry), before → after, at the equator — 900×560: r5
+      4.42 → 4.17 (3.9), mid 5.69 → 5.58 (4.0), r7 7.06 → 7.02 (4.1), r8 8.45 → 8.44
+      (4.1); 1280×800: 4.91 → 4.66 (5.5), 6.19 → 6.08 (5.6), 7.56 → 7.52 (5.7), 8.95 →
+      8.94 (5.8); 1920×1080: 5.44 → 5.20 (8.0), 6.71 → 6.58 (7.9), 8.06 → 8.02 (8.1),
+      9.45 → 9.44 (8.2); 375×812: 3.98 → 3.78 (3.0), 5.30 → 5.18 (3.0), 6.68 → 6.64
+      (3.1), 8.07 → 8.05 (3.1); 2560×1080: 5.73 → 5.56 (10.3), 6.92 → 6.80 (9.2), 8.27 →
+      8.22 (9.3), 9.65 → 9.64 (9.4). At lat 35.68 and 60 the gains are r5 0.22–0.25
+      (0.15–0.17 on 2560×1080), mid 0.12–0.14, r7 0.07–0.08, r8 0.05–0.07. Criterion (b)
+      is met on 1280×800 and 1920×1080 (r5 ≥ 0.22, mid ≥ 0.11). r7 and r8 gain little by
+      geometry, not by omission: their windows are a few degrees across and can sit right
+      next to a vertex, where the floor really is 0.605, and every latitude band is within
+      reach of one at its worst longitude (see the Backlog candidate on longitude).
+      Evidence — gate green on the final tree (verify 50 s, 333 unit tests; render 396 s,
+      all five tiers reached, 0 console errors). The checker, by its own measurement, with
+      no access to the maker's report: (a) `cull_coverage.mjs --scan` 136,320 views, 0
+      windows over the cap (largest 91,872, was 78,283), 0 on-screen cells missing;
+      `scripts/bench/h3_window_count.mjs` 4,800 windows of REAL H3 cells, largest 112,154
+      (93.5 % of the cap); its own adversarial search — hill-climbs from every vertex,
+      random and polar views, 14 canvases incl. 3840×2160, 320×568, 1001×777 and 812×375,
+      then a sweep of every 1° band on six canvases — peaks at 112,604 (93.8 %), none
+      over. The area model holds on 2.62 M hexagons at r5–r8 (smallest ratio 1.20656 ≥
+      the 1.206 used; exact to ~1e-5 in both grid classes); the weight never comes out
+      under a brute-force integral (min ratio 1.022 over 240 windows incl. poles and the
+      antimeridian). (b) its own before/after table matches the one above; nothing starts
+      later anywhere (17 canvases × every 0.37° of latitude: +0.0005 zoom at most, inside
+      the 1/128 search tolerance); order never violated. (c) largest step between
+      adjacent bands 0.099 (r5; 0.094 before) against the 0.15 hysteresis; 6,830 parked
+      runs on every band edge, 0 flaps; a selection-canvas switch cannot loop and every
+      consumer re-selects on it. (d) the 1 px drag 1280 → 1920 computes thresholds for 3
+      canvases (was 40); no stuck covering canvas; the LRU cannot thrash. (e) entry chunk
+      226.49 → 230.80 kB (74.0 gzip), no h3-js or deck.gl in it.
+      Cost and known limits: a cold band is ~13 ms (was ~11.5) and the first one of a
+      session adds a one-off raster fill (first call 87 ms in Node under load, was 43);
+      `npm test` ~12 s → ~22 s; the band-step test limit was relaxed from < 0.011 to
+      < 0.032 (the weight legitimately changes per band; the checker measured 0.0298 at
+      most). Minor findings carried to the Backlog: `covers` holds only to within the
+      search tolerance, and the possible coarse flip during a resize. Not verified: any
+      of it on a real GPU or in a real browser drag; the store's settle timer has no unit
+      test (the pure `resizingCanvas` has).)*

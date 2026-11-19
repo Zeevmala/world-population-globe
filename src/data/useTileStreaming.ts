@@ -175,10 +175,12 @@ export function useTileStreaming(): void {
   const manifest = useGlobeStore((s) => s.manifest)
   const view = useGlobeStore((s) => s.viewState)
   const canvas = useGlobeStore((s) => s.canvas)
+  // Whether a tier streams is tier selection: it reads the settled canvas (`selectionCanvas.ts`).
+  const selectionCanvas = useGlobeStore((s) => s.selectionCanvas)
   const activeLod = useGlobeStore((s) => s.activeLod)
   const setTiles = useGlobeStore((s) => s.setTiles)
   // The tier a flight under way will end on (a primitive: re-renders only when it changes).
-  const flight = useGlobeStore((s) => flightTier(s.flyTarget, s.canvas, s.manifest))
+  const flight = useGlobeStore((s) => flightTier(s.flyTarget, s.selectionCanvas, s.manifest))
 
   const tiled = useMemo(() => manifest?.lods.filter((l) => l.tiled && l.indexFile) ?? [], [manifest])
   const streams = useRef(new Map<string, TierStream>())
@@ -210,7 +212,7 @@ export function useTileStreaming(): void {
       }
       const { ctl } = ts
       const lods = manifest?.lods ?? []
-      if (!streamWanted(lods, lods.indexOf(entry), view, canvas, activeLod, flight)) {
+      if (!streamWanted(lods, lods.indexOf(entry), view, selectionCanvas, activeLod, flight)) {
         if (ctl.key) abandon(ctl)
         ctl.key = ''
         continue
@@ -221,5 +223,5 @@ export function useTileStreaming(): void {
       const gen = abandon(ctl)
       void serve(ts, gen, view, canvas, setTiles)
     }
-  }, [tiled, manifest, view, canvas, activeLod, flight, setTiles])
+  }, [tiled, manifest, view, canvas, selectionCanvas, activeLod, flight, setTiles])
 }

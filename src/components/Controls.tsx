@@ -124,9 +124,10 @@ export function Controls({ onShowHelp, onShare, shareState }: ControlsProps) {
   const minZoom = useGlobeStore((s) => s.viewState.minZoom ?? MIN_ZOOM)
   const maxZoom = useGlobeStore((s) => s.viewState.maxZoom ?? MAX_ZOOM)
 
-  // Where the tiers switch for this view (`tierBands.ts`): this canvas, this latitude —
-  // rounded to 0.5° so a drag re-renders the rail only when a band can visibly move.
-  const canvas = useGlobeStore((s) => s.canvas)
+  // Where the tiers switch for this view (`tierBands.ts`): this canvas (as selection reads it,
+  // `selectionCanvas.ts`), this latitude — rounded to 0.5° so a drag re-renders the rail only
+  // when a band can visibly move.
+  const canvas = useGlobeStore((s) => s.selectionCanvas)
   const lat = useGlobeStore((s) => Math.round(s.viewState.latitude * 2) / 2)
   const bands = manifest ? bandsFor(effectiveBands(manifest.lods, lat, canvas), minZoom, maxZoom) : []
 

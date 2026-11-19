@@ -24,11 +24,11 @@ export function DataStatus() {
   // flight's destination) and hasn't decoded yet — a tier the loader skipped (one a flight
   // passes through, or a deep link lands past) is never reported as loading.
   const pendingLod = useGlobeStore(
-    (s) => pendingWholeTier(planView(s.viewState, s.flyTarget), s.canvas, s.manifest, s.data)?.lod ?? '',
+    (s) => pendingWholeTier(planView(s.viewState, s.flyTarget), s.selectionCanvas, s.manifest, s.data)?.lod ?? '',
   )
   // The tier the camera wants right now, and the one a flight under way will end on.
-  const wantedLod = useGlobeStore((s) => wantedTier(s.viewState, s.canvas, s.manifest)?.lod ?? '')
-  const flight = useGlobeStore((s) => flightTier(s.flyTarget, s.canvas, s.manifest))
+  const wantedLod = useGlobeStore((s) => wantedTier(s.viewState, s.selectionCanvas, s.manifest)?.lod ?? '')
+  const flight = useGlobeStore((s) => flightTier(s.flyTarget, s.selectionCanvas, s.manifest))
 
   if (!manifest) return null
 

@@ -8,6 +8,7 @@ import { SphereGeometry } from '@luma.gl/engine'
 import { BASE } from '../data/load'
 import { densityDomainMax } from '../lib/density'
 import { cullForView, cullKeyFor, selectActive } from '../lib/lod'
+import type { TileCoverage } from '../lib/lod'
 import { EARTH_RADIUS_M, maxColumnHeightM } from '../lib/scales'
 import { tileSetCovers } from '../lib/tiles'
 import { useGlobeStore } from '../store/useGlobeStore'
@@ -29,13 +30,17 @@ export function useGlobeLayers(): Layer[] {
   const manifest = useGlobeStore((s) => s.manifest)
   const viewState = useGlobeStore((s) => s.viewState)
   const canvas = useGlobeStore((s) => s.canvas)
+  // Tier selection reads a canvas that changes only when a resize settles (`selectionCanvas.ts`);
+  // the cull and the tile-coverage test follow the real one.
+  const selectionCanvas = useGlobeStore((s) => s.selectionCanvas)
   const isDragging = useGlobeStore((s) => s.isDragging)
   const activeLod = useGlobeStore((s) => s.activeLod)
   const setActiveLod = useGlobeStore((s) => s.setActiveLod)
   const setHover = useGlobeStore((s) => s.setHover)
 
   const domainMax = useMemo(() => densityDomainMax(manifest), [manifest])
-  const { entry, data: lodData } = selectActive(viewState, canvas, manifest, data, tiles, activeLod, tileSetCovers)
+  const covers: TileCoverage = (set, view) => tileSetCovers(set, view, canvas)
+  const { entry, data: lodData } = selectActive(viewState, selectionCanvas, manifest, data, tiles, activeLod, covers)
 
   // Publish the tier actually on screen. Feeding it back as `activeLod` is what gives
   // `selectActive` its hysteresis, and the UI reads it for the scale readout. The

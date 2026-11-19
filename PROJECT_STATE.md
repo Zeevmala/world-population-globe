@@ -406,6 +406,7 @@ raise the maximum zoom to 10. Carried out as five factory ticks, in dependency o
 | 3 | 10 | Tile streaming for any tiled tier; tiles chosen from the cull's own window | `1856cbe5` |
 | 4 | 11 | r7 tier (roll-up of r8), tiled by r2 parents; `verify:data` generic over tiled tiers | `9f3db146` |
 | 5 | 12 | Per-view tier selection: each tier starts where its cull window fits the cap | `404ac720` |
+| + | 13 | Follow-up: the cap bound knows where H3's cells are small; selection reads a debounced canvas | `feat(lod): weigh each tier's cull window…` |
 
 ### Before and after
 - **Tiers:** r4 / r6 / r8 switching at zoom 2.2 and 4.5 → r4 / r5 / r6 / r7 / r8, each starting
@@ -421,7 +422,7 @@ raise the maximum zoom to 10. Carried out as five factory ticks, in dependency o
   `verify:data` proves both roll-ups cell by cell (~55 s, was ~22 s).
 - **Render gate:** ~400 s → ~190 s on the software rasterizer after tick 8 (far fewer
   sub-pixel prisms), ~390–450 s now that it visits five tiers; worst stall ~40 s → ~18–23 s.
-- **Tests:** 150 → 314.
+- **Tests:** 150 → 333.
 
 ### What the loop caught in this sprint
 Five ticks, four review or gate send-backs, each for something a green gate could not see:
@@ -443,11 +444,19 @@ Two specification errors were mine and were corrected in the queue: an acceptanc
 that contradicted the bench's numbers, and the retry rule above.
 
 ### What it cost, and what is open
-- **Coarser on desktop than it needs to be.** The cap guarantee is conservative: on 1920×1080
-  each tier starts about 1.5 zoom later than the 3-px rule (r5 at 5.44, cells 9.5 px across;
-  r4 cells reach ~23 px first), about 1 zoom later on 1280×800. Recovering that is the first
-  queue item; beyond it the 120 k cap itself is the limit, recorded as an owner decision in
-  the Backlog.
+- **Coarser on desktop than the 3-px rule.** The cap guarantee is conservative. After tick 12,
+  on 1920×1080 each tier started about 1.5 zoom later than the 3-px rule (r5 at 5.44, cells
+  9.5 px across; r4 cells reach ~23 px first), about 1 zoom later on 1280×800. Tick 13 took
+  back what a bound without a longitude key can: H3's hexagons are 1.2066 · cos³θ × the mean
+  (θ to the nearest icosahedron face centre), so a window is weighed by where the small cells
+  can actually be instead of by the smallest cell anywhere. r5 now starts 0.22–0.25 zoom
+  earlier on desktop (1920×1080: 5.20, cells 8.0 px), mid 0.11–0.13, r7 and r8 under 0.1 —
+  their windows are small enough to sit next to a vertex. The guarantee is unchanged: the
+  checker's adversarial search over 14 canvases peaks at 93.8 % of the cap in real H3 cells,
+  and the 136,320-view scan still finds no window over it and no cell missing. What is left
+  is recorded in the Backlog: longitude-aware thresholds (0.13–0.35 zoom at typical cities
+  for r7/r8, at the price of a second cache dimension), and the 120 k cap itself, an owner
+  decision that needs frame times on a real GPU.
 - **Not verified:** anything on a real GPU; the original pipeline scripts end to end (the
   Kontur source is unreachable from the cloud session — the new tiers are built from the
   committed data); `verify_live.mjs` against a deployment.
