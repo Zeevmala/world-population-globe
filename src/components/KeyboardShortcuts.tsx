@@ -104,6 +104,10 @@ export function KeyboardShortcuts({
         case 'C':
           onShare()
           return
+        case 'n':
+        case 'N':
+          store.toggleBasemap()
+          return
         case 'Escape':
           onEscape()
           return

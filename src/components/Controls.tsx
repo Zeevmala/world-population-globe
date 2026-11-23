@@ -9,6 +9,7 @@ import {
   IconHelp,
   IconLink,
   IconMinus,
+  IconMoon,
   IconPause,
   IconPlay,
   IconPlus,
@@ -123,6 +124,10 @@ export function Controls({ onShowHelp, onShare, shareState }: ControlsProps) {
   const zoom = useGlobeStore((s) => s.viewState.zoom)
   const minZoom = useGlobeStore((s) => s.viewState.minZoom ?? MIN_ZOOM)
   const maxZoom = useGlobeStore((s) => s.viewState.maxZoom ?? MAX_ZOOM)
+  const basemap = useGlobeStore((s) => s.basemap)
+  const toggleBasemap = useGlobeStore((s) => s.toggleBasemap)
+  const nightPressed = basemap.want === 'night'
+  const nightLoading = nightPressed && basemap.texture === 'loading'
 
   // Where the tiers switch for this view (`tierBands.ts`): this canvas (as selection reads it,
   // `selectionCanvas.ts`), this latitude — rounded to 0.5° so a drag re-renders the rail only
@@ -147,6 +152,17 @@ export function Controls({ onShowHelp, onShare, shareState }: ControlsProps) {
         </HudButton>
         <HudButton label="Reset view" shortcut="H" onClick={home}>
           <IconGlobe />
+        </HudButton>
+        {/* Pressed = asked for. While the texture loads the dark basemap stays and the
+            button says so; a failed load un-presses it and the alert below explains. */}
+        <HudButton
+          label={nightLoading ? 'Night lights (loading…)' : 'Night lights'}
+          shortcut="N"
+          pressed={nightPressed}
+          busy={nightLoading}
+          onClick={toggleBasemap}
+        >
+          <IconMoon />
         </HudButton>
         <HudButton
           label={
@@ -185,6 +201,12 @@ export function Controls({ onShowHelp, onShare, shareState }: ControlsProps) {
           <IconHelp />
         </HudButton>
       </div>
+
+      {basemap.error ? (
+        <p role="alert" className="hud-panel max-w-52 px-2.5 py-1.5 text-[11px] leading-snug text-white/85">
+          {basemap.error}
+        </p>
+      ) : null}
 
       {/* Copy feedback is visual (icon + tooltip) and announced, since the icon swap
           alone is invisible to a screen-reader user. */}

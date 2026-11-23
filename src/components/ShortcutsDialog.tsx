@@ -9,6 +9,7 @@ const ROWS: { action: string; keys: string[]; note?: string }[] = [
   { action: 'Search a place', keys: ['/'] },
   { action: 'Auto-rotate on / off', keys: ['R'] },
   { action: 'Reset to the hero view', keys: ['H'] },
+  { action: 'Night lights on / off', keys: ['N'] },
   { action: 'Copy a link to this view', keys: ['C'] },
   { action: 'Show these shortcuts', keys: ['?'] },
   { action: 'Close / dismiss', keys: ['Esc'] },

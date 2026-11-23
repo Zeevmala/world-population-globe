@@ -6,12 +6,14 @@ import { SimpleMeshLayer } from '@deck.gl/mesh-layers'
 import { SphereGeometry } from '@luma.gl/engine'
 
 import { BASE } from '../data/load'
+import { basemapPlan, shownBasemap } from '../lib/basemap'
 import { densityDomainMax } from '../lib/density'
 import { cullForView, cullKeyFor, selectActive } from '../lib/lod'
 import type { TileCoverage } from '../lib/lod'
 import { EARTH_RADIUS_M, maxColumnHeightM } from '../lib/scales'
 import { tileSetCovers } from '../lib/tiles'
 import { useGlobeStore } from '../store/useGlobeStore'
+import { buildNightLayer } from './nightLayer'
 import { buildPopulationLayer } from './populationLayer'
 
 const OCEAN: Color = [8, 18, 33]
@@ -23,7 +25,11 @@ const SPHERE_MESH = new SphereGeometry({ radius: EARTH_RADIUS_M, nlat: 36, nlong
 const ORIGIN: [number, number, number] = [0, 0, 0]
 const LAND_URL = `${BASE}data/land.geojson`
 
-/** Assemble the globe layer stack: ocean sphere, land outline, population columns. */
+/**
+ * Assemble the globe layer stack: ocean sphere, land outline, population columns — or, with
+ * night lights on, the Black Marble layer in place of the sphere and the land fill (which
+ * stay in the stack, hidden: `lib/basemap.ts` `basemapPlan`).
+ */
 export function useGlobeLayers(): Layer[] {
   const data = useGlobeStore((s) => s.data)
   const tiles = useGlobeStore((s) => s.tiles)
@@ -37,6 +43,10 @@ export function useGlobeLayers(): Layer[] {
   const activeLod = useGlobeStore((s) => s.activeLod)
   const setActiveLod = useGlobeStore((s) => s.setActiveLod)
   const setHover = useGlobeStore((s) => s.setHover)
+  const plan = basemapPlan(useGlobeStore((s) => shownBasemap(s.basemap)))
+  const basemapImage = useGlobeStore((s) => s.basemapImage)
+  const nightImage = plan.night ? basemapImage : null
+  const { sphere: showSphere, land: showLand } = plan
 
   const domainMax = useMemo(() => densityDomainMax(manifest), [manifest])
   const covers: TileCoverage = (set, view) => tileSetCovers(set, view, canvas)
@@ -72,7 +82,9 @@ export function useGlobeLayers(): Layer[] {
         coordinateSystem: COORDINATE_SYSTEM.CARTESIAN,
         getPosition: () => ORIGIN,
         getColor: OCEAN,
+        visible: showSphere,
       }),
+      ...(nightImage ? [buildNightLayer(nightImage)] : []),
       new GeoJsonLayer({
         id: 'earth-land',
         data: LAND_URL,
@@ -81,6 +93,7 @@ export function useGlobeLayers(): Layer[] {
         getFillColor: LAND_FILL,
         getLineColor: LAND_LINE,
         lineWidthMinPixels: 0.5,
+        visible: showLand,
       }),
     ]
     if (lodData) {
@@ -97,5 +110,5 @@ export function useGlobeLayers(): Layer[] {
       )
     }
     return layers
-  }, [lodData, cull, styleKey, isDragging, domainMax, elevationScale, setHover])
+  }, [lodData, cull, styleKey, isDragging, domainMax, elevationScale, setHover, showSphere, showLand, nightImage])
 }

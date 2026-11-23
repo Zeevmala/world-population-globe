@@ -4,6 +4,8 @@ import type { Canvas } from '../lib/footprint'
 import { MAX_ZOOM, MIN_ZOOM, wrapLng } from '../lib/camera'
 import { wantedIndex } from '../lib/tierBands'
 import { arrivalZoom } from '../lib/tierPlan'
+import { INITIAL_BASEMAP, basemapReducer } from '../lib/basemap'
+import type { BasemapState } from '../lib/basemap'
 import { SETTLE_MS, resizingCanvas } from '../lib/selectionCanvas'
 import { parseHash } from '../lib/urlState'
 import { prefersReducedMotion } from '../lib/useReducedMotion'
@@ -79,6 +81,10 @@ interface GlobeStore {
    * drag computes new tier thresholds a handful of times instead of on every 16 px.
    */
   selectionCanvas: Canvas
+  /** The basemap toggle and its texture's load state (`lib/basemap.ts`). Not in the URL. */
+  basemap: BasemapState
+  /** The decoded night-lights texture, once loaded; kept so turning it back on costs no request. */
+  basemapImage: ImageBitmap | null
 
   setManifest: (m: Manifest) => void
   addData: (d: LodData) => void
@@ -97,6 +103,10 @@ interface GlobeStore {
   landed: (id: number) => void
   toggleAutoRotate: () => void
   setAutoRotate: (on: boolean) => void
+  /** Night lights on / off (the first "on" starts the texture fetch). */
+  toggleBasemap: () => void
+  basemapLoaded: (image: ImageBitmap) => void
+  basemapFailed: (message: string) => void
 }
 
 /** Pending switch of `selectionCanvas` back to the real canvas once resizing stops. */
@@ -118,6 +128,8 @@ export const useGlobeStore = create<GlobeStore>((set, get) => ({
   activeLod: null,
   canvas: { width: window.innerWidth, height: window.innerHeight },
   selectionCanvas: { width: window.innerWidth, height: window.innerHeight },
+  basemap: INITIAL_BASEMAP,
+  basemapImage: null,
 
   setManifest: (manifest) => set({ manifest }),
   addData: (d) => set((s) => ({ data: { ...s.data, [d.lod]: d } })),
@@ -185,6 +197,17 @@ export const useGlobeStore = create<GlobeStore>((set, get) => ({
   landed: (id) => set((s) => (s.flyTarget?.id === id ? { flyTarget: null } : s)),
   toggleAutoRotate: () => set((s) => ({ autoRotate: !s.autoRotate })),
   setAutoRotate: (autoRotate) => set({ autoRotate }),
+  toggleBasemap: () => set((s) => ({ basemap: basemapReducer(s.basemap, { type: 'toggle' }) })),
+  basemapLoaded: (image) =>
+    set((s) => {
+      const basemap = basemapReducer(s.basemap, { type: 'loaded' })
+      return basemap === s.basemap ? s : { basemap, basemapImage: image }
+    }),
+  basemapFailed: (message) =>
+    set((s) => {
+      const basemap = basemapReducer(s.basemap, { type: 'failed', message })
+      return basemap === s.basemap ? s : { basemap }
+    }),
 }))
 
 // Dev-only debug handle (stripped from production builds): lets tooling inspect

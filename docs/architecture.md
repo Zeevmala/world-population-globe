@@ -167,7 +167,7 @@ src/
   components/
     Globe.tsx           # DeckGL + _GlobeView, controlled viewState, idle auto-rotate, lighting
     Header / Controls / Legend / InfoPanel / Attribution / Loader
-  layers/useGlobeLayers # sphere (SimpleMeshLayer) + land (GeoJsonLayer) + population (layers/populationLayer: H3 cells as a PolygonLayer, cached boundaries)
+  layers/useGlobeLayers # sphere (SimpleMeshLayer) + land (GeoJsonLayer) + population (layers/populationLayer: H3 cells as a PolygonLayer, cached boundaries); night lights (layers/nightLayer) in place of sphere + land when toggled
   data/
     load.ts             # manifest + LOD loaders → columnar typed arrays
     decode.worker.ts    # off-thread fetch + Parquet decode → transferable typed arrays
@@ -177,6 +177,7 @@ src/
     useGlobeData.ts     # eager overview + lazy r5 / mid as the view (or flight) needs them (wholeTiersFor)
     tileStream.ts       # one tiled tier's tile cache: LRU eviction, dedupe, merge, bounded retry
     useTileStreaming.ts # every tiled tier: tile key → selectParents → tileStream, retry timer, idle ring prefetch
+    useBasemapTexture.ts # night-lights texture: fetched on the first "on" only, sized to MAX_TEXTURE_SIZE
   lib/
     density.ts          # cell area per H3 res, people/km², shared cross-tier domain
     lod.ts              # pickLod() + selectActive() + streamWanted() + cullForView() + quickselect cap
@@ -189,6 +190,8 @@ src/
     tiles.ts            # selectParents() (parents overlapping the cull window + ring), tileSetCovers(), tileKey()
     scales.ts           # zoom-continuous column height + earth constants
     colorRamp.ts        # Inferno ramp (RGB + CSS)
+    basemap.ts          # basemap toggle state machine, layer plan, texture choice, the luminance bound
+    globeBitmapMesh.ts  # 1° lng/lat mesh for the night-lights BitmapLayer
     format.ts           # population / lat-lng formatting
   store/useGlobeStore   # Zustand: manifest, data, viewState, canvas size, hover, autoRotate, status
 ```
@@ -249,6 +252,45 @@ src/
     The r8 tile merge is now a typed-array `set()` instead of a per-cell string copy.
 - **Globe** — dark ocean sphere (`SimpleMeshLayer`, CARTESIAN) + Natural Earth 110 m land
   outline; ambient + directional lighting so columns read as 3D while keeping ramp colors true.
+- **Night-lights basemap** (decided 2026-11-23; `Controls` toggle, key `N`, off by default, not in
+  the share URL). NASA Black Marble (GIBS layer `VIIRS_Black_Marble`, the 2016 VIIRS composite,
+  public domain, credited in the footer while on screen), encoded by
+  `scripts/texture/encode_black_marble.py` (provenance, WMS request and source sha256 in its
+  header) into `public/basemap/black-marble-{4096,2048}.jpg` (429 kB / 121 kB; the 5 MB source
+  PNG is not committed).
+  - **Route: a `BitmapLayer` over [-180, -90, 180, 90], not a texture on the sphere.** The
+    `SimpleMeshLayer` sphere is built about +Y in luma's frame while GlobeView's north is +Z, and
+    its UVs run from the north pole down — a texture there needs a rotation and a v-flip to be
+    proven; BitmapLayer is georeferenced by its bounds through the same lng/lat → globe
+    projection the columns use, unlit, mipmapped. One change: BitmapLayer tessellates at the
+    viewport's `resolution`, 10° on a GlobeView, and each 10° facet is a chord up to ~48 km
+    under the sphere the columns stand on — seen off-nadir at an r8 zoom that parallax moved
+    the lights tens of km from their columns. `layers/nightLayer.ts` subclasses it with a 1°
+    mesh (`lib/globeBitmapMesh.ts`, deck's own vertex layout, ≤ 0.5 km sag; closed at the
+    antimeridian and the poles, unit-tested against deck's `createMesh` and `GlobeViewport`).
+    In night mode the sphere and the land fill are hidden (the fill would cover the lights;
+    they stay in the stack so the way back re-fetches nothing) and the night layer is the
+    only basemap layer drawn, so it cannot z-fight the sphere; it sits under the columns
+    because it is below the true surface they stand on. Off, the stack is exactly the old one.
+  - **Data > basemap, as a number.** No texture pixel is brighter than the Inferno ramp's
+    midpoint, (186, 57, 83), relative luminance 0.140 (`lib/basemap.ts`
+    `INFERNO_MID_LUMINANCE`). Baked into the texture, not applied at draw time (desaturation
+    raises a blue pixel's luminance; a tint would darken the land too): a knee-and-shoulder
+    curve on luminance in linear light — untouched up to Y 0.04, so the land/ice tone (Y 0.035)
+    and the sea keep their exact colour (0.62 % of pixels change), then compressed smoothly
+    toward 0.11, hue kept — and a JPEG ringing pass that scales down the lights of any 16×16
+    block whose decoded pixels overshoot 0.9 × 0.140. City lights end up a dull amber
+    (~110, 97, 89) that never competes with the yellow top of the ramp.
+  - **Lazy and sized to the GPU.** Nothing is requested until the toggle is first turned on
+    (`lib/basemap.ts` state machine: idle → loading → ready | failed; a failure leaves the dark
+    basemap, un-presses the toggle and says so; the next "on" retries). The file is the
+    largest that fits `device.limits.maxTextureDimension2D` — 4096×2048, or 2048×1024 where
+    MAX_TEXTURE_SIZE is WebGL 2's minimum 2048 — fetched whole, decoded with
+    `createImageBitmap`, and kept, so later toggles cost no request. The layer is dropped when
+    off (deck frees the ~45 MB mipmapped GPU texture); the ImageBitmap (~32 MB) stays.
+  - Proof: `scripts/qa/basemap_qa.mjs` (headless; pixel identity off/on/off, georeferencing at
+    six column-free places against mirror / flip / offset textures, the rendered and decoded
+    luminance bound, the network assertions, the failure path, a 2048 MAX_TEXTURE_SIZE).
 - **Interaction performance** (panning was the user-felt cost — most of it was paid *per
   pointer event* during a drag, invisible to a synthetic `setViewState` benchmark):
   - **Picking off while dragging** — a `pickable` layer re-renders the picking buffer on every
@@ -316,7 +358,8 @@ src/
 
 - Vite `base` = `/world-population-globe/` (prod) / `/` (dev); data fetched via `import.meta.env.BASE_URL`.
 - GitHub Actions: **CI** (tsc + ESLint + build) and **Pages deploy** (`actions/deploy-pages`).
-- No secrets — the basemap is self-rendered; all data is open + static.
+- No secrets — the dark basemap is self-rendered, the night-lights texture is a committed
+  static file; all data is open + static.
 
 ## 6. Scale roadmap
 

@@ -39,52 +39,10 @@ REPORT  : evidence in the Done note + commit body; sprint summary → PROJECT_ST
 
 ## Queue
 
-Option A (decided 2026-11-18, see **Backlog**) is done — its five items and the
-follow-up that tightened the cap rule (tick 13) are under **Done**. First here is the
-night-lights basemap, unblocked 2026-11-23 when the owner permitted the texture download;
-the item after it still waits on a pull request.
+Option A (decided 2026-11-18, see **Backlog**) is done — its five items, the follow-up
+that tightened the cap rule (tick 13) and the night-lights basemap (tick 14) are under
+**Done**. The one item left here waits on a pull request.
 
-- [ ] Night-lights basemap toggle: offer NASA's Black Marble as a second basemap behind a
-      `Controls.tsx` toggle, the current dark ocean + land fill staying the default.
-      Columns must stay legible (VISION: data > labels > basemap) — and night lights are
-      bright yellow exactly where the densest columns are, the top of the Inferno ramp, so
-      the lights have to be held down, not shown at full strength.
-      Source (owner permitted the download 2026-11-23): NASA GIBS, layer
-      `VIIRS_Black_Marble` ("Black Marble (VIIRS, Suomi NPP)", the 2016 composite), WMS
-      `https://gibs.earthdata.nasa.gov/wms/epsg4326/all/wms.cgi` GetMap, EPSG:4326, BBOX
-      -90,-180,90,180, 4096×2048 PNG, fetched 2026-11-23, sha256 `fb9ff079…28f1078` (the
-      `best` endpoint and some `all` backends answer with a MapServer error page — retry).
-      Equirectangular, north up, −180° at the left edge; the two edge columns match (mean
-      abs difference 0.96 of 255), so it wraps. NASA imagery is public domain; GIBS asks to
-      be acknowledged. The 5 MB PNG is not committed — the committed texture is a JPEG
-      encoded from it by a script kept in the repo.
-      Accept: (a) the toggle is a real control — a button with a pressed state, reachable
-      by keyboard, listed in the shortcuts dialog if it gets a key — and a headless check
-      turns it on and off at overview zoom and at an r8 zoom: on changes the canvas, off
-      restores the dark basemap pixel for pixel (same view, columns settled);
-      (b) georeferencing is proven, not eyeballed: the same check reads the rendered canvas
-      at the view centre for at least four places with no population columns, chosen so an
-      east–west mirror, a north–south flip and a longitude offset would each fail it (the
-      Greenland ice cap against the same latitude mirrored in longitude, Antarctica
-      against the Arctic Ocean, the Sahara against the mid-Pacific), and each agrees with
-      the texture's own pixel at that longitude and latitude;
-      (c) data > basemap as a stated, pinned number: with night lights on, no basemap
-      pixel is brighter than the Inferno colour at the ramp's midpoint (relative
-      luminance) — say how the lights are held down (a tone curve baked into the texture,
-      or a tint / desaturation at draw time) and what it does to the land tones, with
-      before/after screenshots over Europe–India at overview zoom and over a city at r8;
-      (d) the texture is < 2 MB, is requested only when the toggle is first turned on (a
-      network assertion: a cold load with the toggle off never requests it; turning it on
-      twice requests it once) and adds nothing to the entry chunk beyond the toggle
-      (report the entry chunk before / after); it must also work where
-      `MAX_TEXTURE_SIZE` is 2048, WebGL 2's minimum — say how;
-      (e) a failed texture request (blocked in the headless check) leaves the dark basemap
-      on screen, the toggle not pressed, a message the user can read, and no unhandled
-      rejection; (f) the credit line names NASA Black Marble / GIBS while night lights are
-      on, and the Kontur CC-BY credit is unchanged in both modes; (g) 0 console errors in
-      the render gate, and the default first paint (toggle off) is pixel-identical to
-      before the change on the gate's hero view.
-      Gate: verify, qa:render.
 - [ ] Wire the render gate into CI: run `npm run qa:render` in `.github/workflows/ci.yml`
       against the dev server, uploading the report + screenshots as artifacts, and fail on
       console errors, a blank canvas or a broken cell cap (the exact checks — the
@@ -132,6 +90,27 @@ the item after it still waits on a pull request.
   `prefixRows` in `tierFit.ts` is bounded by construction (360 rows × 11.5 kB). Trim the
   unit suite: `npm test` went ~12 s → ~22 s; the monotonicity sweep can step 0.1 instead
   of 0.05 and the area-model test needs ~5 k cells per resolution, not 850 k in all.
+- (small, from tick 14's review — the night-lights basemap) (1) If the GPU device never
+  initializes, the toggle stays "loading…" with `aria-busy` and no message
+  (`useBasemapTexture.ts` waits for `onDeviceInitialized`); give it a timeout or fail it.
+  (2) An image that arrives after its request stopped mattering is dropped without
+  `close()` (~32 MB left to the garbage collector; hard to reach). (3) The decoded
+  bitmap (~32 MB) is kept for the session so later toggles cost no request, and every
+  "on" re-uploads the texture and rebuilds its mipmaps — measure the hitch on a real GPU
+  and decide whether to keep the GPU texture instead. (4) `scripts/qa/basemap_qa.mjs`
+  proves georeferencing only against the texture itself, at the screen centre, on flat
+  ice / desert / sea: add an off-centre check and one against `land.geojson` coasts (the
+  checker's `georef.py` did both by hand). (5) `globeBitmapMesh.test.ts`'s "sinks at most
+  ~0.5 km" test checks a formula in the test, not the mesh. (6) `verify_live.mjs` should
+  fetch `basemap/black-marble-2048.jpg` after a deploy — nothing does today. (7)
+  `docs/architecture.md` says land and sea "keep their exact colour"; after JPEG they
+  are within ~1 level on average and up to 40 next to lights. (8) The basemap mode is
+  not in the share link, so a shared view always opens on the dark basemap.
+- (to look at on a real machine) Night lights at r8 zoom: the 4096 px texture is
+  magnified ~30×, so city glow is a soft grey blur that spills over water (Tokyo Bay
+  reads as grey fog between the columns), and the ocean is near-black, leaving the
+  globe's outline to the atmosphere glow. Options if it reads badly: fade the night
+  layer toward the dark basemap past the r6 band, or keep the dark ocean under it.
 - (to look at on a real machine) While a window is being resized, selection reads a canvas
   up to 1.25× larger than the real one, so a view just past a threshold can drop to the
   coarser tier during the drag and return ~250 ms after it stops. Cheap to change if it
@@ -950,3 +929,97 @@ the item after it still waits on a pull request.
       search tolerance, and the possible coarse flip during a resize. Not verified: any
       of it on a real GPU or in a real browser drag; the store's settle timer has no unit
       test (the pure `resizingCanvas` has).)*
+- [x] Night-lights basemap toggle: offer NASA's Black Marble as a second basemap behind a
+      `Controls.tsx` toggle, the current dark ocean + land fill staying the default.
+      Columns must stay legible (VISION: data > labels > basemap) — and night lights are
+      bright yellow exactly where the densest columns are, the top of the Inferno ramp, so
+      the lights have to be held down, not shown at full strength.
+      Source (owner permitted the download 2026-11-23): NASA GIBS, layer
+      `VIIRS_Black_Marble` ("Black Marble (VIIRS, Suomi NPP)", the 2016 composite), WMS
+      `https://gibs.earthdata.nasa.gov/wms/epsg4326/all/wms.cgi` GetMap, EPSG:4326, BBOX
+      -90,-180,90,180, 4096×2048 PNG, fetched 2026-11-23, sha256 `fb9ff079…28f1078` (the
+      `best` endpoint and some `all` backends answer with a MapServer error page — retry).
+      Equirectangular, north up, −180° at the left edge; the two edge columns match (mean
+      abs difference 0.96 of 255), so it wraps. NASA imagery is public domain; GIBS asks to
+      be acknowledged. The 5 MB PNG is not committed — the committed texture is a JPEG
+      encoded from it by a script kept in the repo.
+      Accept: (a) the toggle is a real control — a button with a pressed state, reachable
+      by keyboard, listed in the shortcuts dialog if it gets a key — and a headless check
+      turns it on and off at overview zoom and at an r8 zoom: on changes the canvas, off
+      restores the dark basemap pixel for pixel (same view, columns settled);
+      (b) georeferencing is proven, not eyeballed: the same check reads the rendered canvas
+      at the view centre for at least four places with no population columns, chosen so an
+      east–west mirror, a north–south flip and a longitude offset would each fail it (the
+      Greenland ice cap against the same latitude mirrored in longitude, Antarctica
+      against the Arctic Ocean, the Sahara against the mid-Pacific), and each agrees with
+      the texture's own pixel at that longitude and latitude;
+      (c) data > basemap as a stated, pinned number: with night lights on, no basemap
+      pixel is brighter than the Inferno colour at the ramp's midpoint (relative
+      luminance) — say how the lights are held down (a tone curve baked into the texture,
+      or a tint / desaturation at draw time) and what it does to the land tones, with
+      before/after screenshots over Europe–India at overview zoom and over a city at r8;
+      (d) the texture is < 2 MB, is requested only when the toggle is first turned on (a
+      network assertion: a cold load with the toggle off never requests it; turning it on
+      twice requests it once) and adds nothing to the entry chunk beyond the toggle
+      (report the entry chunk before / after); it must also work where
+      `MAX_TEXTURE_SIZE` is 2048, WebGL 2's minimum — say how;
+      (e) a failed texture request (blocked in the headless check) leaves the dark basemap
+      on screen, the toggle not pressed, a message the user can read, and no unhandled
+      rejection; (f) the credit line names NASA Black Marble / GIBS while night lights are
+      on, and the Kontur CC-BY credit is unchanged in both modes; (g) 0 console errors in
+      the render gate, and the default first paint (toggle off) is pixel-identical to
+      before the change on the gate's hero view.
+      Gate: verify, qa:render.
+      *(Done 2026-11-23, factory tick 14. What shipped: a moon button in the controls
+      (shortcut N, `aria-pressed`, a busy state while loading, a `role="alert"` message on
+      failure) that swaps the ocean sphere + land fill for NASA Black Marble. The texture
+      is drawn by a `BitmapLayer` georeferenced by its bounds [-180, -90, 180, 90] — the
+      same lng/lat → globe projection the columns use — not by texturing the sphere mesh,
+      whose pole axis (+Y in luma) and UV origin differ from GlobeView's and would each
+      have needed proving. deck.gl tessellates a bitmap at the GlobeView's 10° resolution,
+      which sinks up to ~48 km under the surface the columns stand on, so
+      `src/layers/nightLayer.ts` overrides the mesh with a 1° grid
+      (`src/lib/globeBitmapMesh.ts`, ≤ ~0.5 km under). In night mode the sphere and land
+      layers stay in the stack hidden; with the toggle off the stack is exactly the old
+      one. The lights are held down in the texture itself, not at draw time (desaturating
+      raises a blue pixel's luminance; a tint darkens the land too):
+      `scripts/texture/encode_black_marble.py` applies a luminance knee at Y 0.04 (99.38 %
+      of pixels are under it and untouched) with a shoulder toward 0.11, then re-encodes
+      until JPEG ringing is under the bound too. Two files are committed —
+      `public/basemap/black-marble-4096.jpg` (429,424 B) and `-2048.jpg` (120,534 B) — and
+      the one that fits the device's `maxTextureDimension2D` is fetched, whole, on the
+      first "on" only. State machine and layer plan are pure (`src/lib/basemap.ts`); the
+      hook (`src/data/useBasemapTexture.ts`) is thin.
+      Evidence — gate green on the final tree (verify 47 s, 353 unit tests; render 365 s,
+      0 console errors). The checker, by its own measurement, without the maker's report:
+      (a) pressed false → true (busy while loading) → false in its own headless run; N
+      does nothing while typing in the search box or with Alt / Ctrl+Shift; the kept
+      check (`npm run qa:basemap`, 71 of 71) shows on changing 16–18 % of canvas pixels
+      and off restoring 0 differing pixels at the hero view, Europe–India and Tokyo r8.
+      (b) georeferencing two independent ways: the texture's land/sea split against
+      Natural Earth (`land.geojson`) agrees 0.802 as is, against 0.717 mirrored, 0.684
+      flipped, 0.772 shifted 10°, best shift 0 px; and the rendered frame, unprojected
+      through deck's own GlobeViewport on every 3rd pixel of 7 views (antimeridian, both
+      poles, off-centre, Tokyo r8), matches the texture at shift 0 in every quadrant —
+      mean abs difference 0.04–1.56 against 3.6–59 mirrored and 11–46 flipped; no hole
+      at ±180° or the poles; no measurable parallax between lights and columns at r8.
+      (c) brightest decoded pixel 0.1259 (4096) / 0.1258 (2048) against the Inferno
+      midpoint's 0.1399 — the source peaks at 1.0; rendered basemap-only frames peak at
+      0.040–0.122; sea (4,5,15) and land/ice (43,51,85) come out within ~1 level; bright
+      lights (222,200,171) become (91,85,85), greyish amber, off the Inferno ramp. The
+      encode script reproduces both committed files byte for byte. (d) 0 texture
+      requests on a cold load, one across on/off/on during the load and four more
+      toggles; entry chunk 230.80 → 233.03 kB with no deck.gl in it; with
+      MAX_TEXTURE_SIZE forced to 2048 only the 2048 file is requested. (e) a blocked
+      request: toggle not pressed, alert shown, default layer stack, no unhandled
+      rejection, retry works. (f) Kontur credit identical in both modes and before the
+      manifest loads; the NASA Black Marble / GIBS line only while night lights are on.
+      (g) dark mode: the diff adds only `visible: true` (the default) to the two old
+      layers; the maker's pre-change baseline shows 0 differing pixels on three views.
+      Known limits, carried to the Backlog: the checker's minor findings (a toggle stuck
+      on "loading…" if the GPU device never starts; a late image not closed; the kept
+      check's georeference is weaker than the checker's own; `verify_live.mjs` does not
+      fetch the texture; mode not in the share link) and the look at r8 zoom, where the
+      magnified texture is a grey blur over water. Not verified: a real GPU, a real
+      2048-limited device (the limit was emulated), the re-upload hitch on toggle; the
+      encode script needs numpy + Pillow and is not run in CI.)*

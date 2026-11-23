@@ -406,7 +406,8 @@ raise the maximum zoom to 10. Carried out as five factory ticks, in dependency o
 | 3 | 10 | Tile streaming for any tiled tier; tiles chosen from the cull's own window | `1856cbe5` |
 | 4 | 11 | r7 tier (roll-up of r8), tiled by r2 parents; `verify:data` generic over tiled tiers | `9f3db146` |
 | 5 | 12 | Per-view tier selection: each tier starts where its cull window fits the cap | `404ac720` |
-| + | 13 | Follow-up: the cap bound knows where H3's cells are small; selection reads a debounced canvas | `feat(lod): weigh each tier's cull window…` |
+| + | 13 | Follow-up: the cap bound knows where H3's cells are small; selection reads a debounced canvas | `e2394f59` |
+| + | 14 | Opt-in NASA Black Marble night-lights basemap (owner permitted the GIBS download 2026-11-23) | `feat(basemap): opt-in NASA Black Marble…` |
 
 ### Before and after
 - **Tiers:** r4 / r6 / r8 switching at zoom 2.2 and 4.5 → r4 / r5 / r6 / r7 / r8, each starting
@@ -422,7 +423,15 @@ raise the maximum zoom to 10. Carried out as five factory ticks, in dependency o
   `verify:data` proves both roll-ups cell by cell (~55 s, was ~22 s).
 - **Render gate:** ~400 s → ~190 s on the software rasterizer after tick 8 (far fewer
   sub-pixel prisms), ~390–450 s now that it visits five tiers; worst stall ~40 s → ~18–23 s.
-- **Tests:** 150 → 333.
+- **Basemap (tick 14):** a night-lights toggle (N) swaps the ocean sphere and land fill for
+  NASA Black Marble (VIIRS 2016, via GIBS; 429 kB at 4096 px, 121 kB at 2048 px, fetched only
+  when turned on). The lights sit exactly where the densest columns are and share the top of
+  the Inferno ramp's colour, so the texture is tone-mapped before it is committed: no pixel is
+  brighter than the ramp's midpoint (0.126 against 0.140 relative luminance; the source peaks
+  at 1.0), while land and sea tones are left within a level. Georeferenced by a `BitmapLayer`'s
+  bounds on a 1° mesh; the checker confirmed it against Natural Earth coasts and by
+  unprojecting rendered frames. The default (dark) render is pixel-identical to before.
+- **Tests:** 150 → 353.
 
 ### What the loop caught in this sprint
 Five ticks, four review or gate send-backs, each for something a green gate could not see:
@@ -461,8 +470,9 @@ that contradicted the bench's numbers, and the retry rule above.
   Kontur source is unreachable from the cloud session — the new tiers are built from the
   committed data); `verify_live.mjs` against a deployment.
 - **Still waiting on the owner:** a pull request (the CI render-gate item, and the first
-  GitHub Actions run of the test and data-gate steps added in Sprint 8), and the night-lights
-  texture.
+  GitHub Actions run of the test and data-gate steps added in Sprint 8); the 120 k cap
+  decision; and a look at night lights on a real screen — at r8 zoom the magnified texture is
+  a grey blur over water (Backlog).
 
 ## Iteration loop
 

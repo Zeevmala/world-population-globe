@@ -111,6 +111,11 @@ export function IconGlobe({ className }: IconProps) {
   )
 }
 
+/** Night-lights basemap (a crescent moon). */
+export function IconMoon({ className }: IconProps) {
+  return SVG(className, <path d="M19.5 14.6A8 8 0 0 1 9.4 4.5a8 8 0 1 0 10.1 10.1z" />)
+}
+
 /** Drag / spin affordance for the intro card. */
 export function IconDrag({ className }: IconProps) {
   return SVG(

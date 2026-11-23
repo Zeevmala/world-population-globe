@@ -12,6 +12,7 @@ import { useGlobeStore } from '../store/useGlobeStore'
 import { useGlobeLayers } from '../layers/useGlobeLayers'
 import { useGlobeData } from '../data/useGlobeData'
 import { useTileStreaming } from '../data/useTileStreaming'
+import { useBasemapTexture } from '../data/useBasemapTexture'
 import { useReducedMotion } from '../lib/useReducedMotion'
 import { formatHash } from '../lib/urlState'
 
@@ -51,6 +52,9 @@ export function Globe() {
   const reducedMotion = useReducedMotion()
   const [flying, setFlying] = useState(false)
   const [sharp, setSharp] = useState(false)
+  // The GPU's texture-size limit picks the night-lights file (`lib/basemap.ts` `basemapTextureFor`).
+  const [maxTextureSize, setMaxTextureSize] = useState<number | null>(null)
+  useBasemapTexture(maxTextureSize)
 
   useEffect(() => {
     if (!autoRotate) return
@@ -183,6 +187,7 @@ export function Globe() {
       onViewStateChange={(e) => setViewState(e.viewState as unknown as GlobeViewState)}
       // The viewport cull keeps what this canvas shows, so its size is part of the cull key.
       onResize={({ width, height }) => setCanvas(width, height)}
+      onDeviceInitialized={(device) => setMaxTextureSize(device.limits.maxTextureDimension2D)}
       onInteractionStateChange={(s: { isDragging?: boolean }) => {
         const dragging = !!s.isDragging
         setDragging(dragging)

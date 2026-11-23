@@ -27,6 +27,7 @@ React 19 + TypeScript (strict) + Vite + Tailwind v4 · deck.gl 9 · Zustand · h
 | `npm run verify:live [url]` | Post-deploy E2E — fetch + parse the deployed manifest/tiers/tile, Σ-pop check |
 | `npm run verify:data` | Local data gate — every whole tier + all 2,409 r7 and 12,761 r8 tiles: Σ-pop, counts, CRS bounds, H3 parent roll-ups (tile ↔ parent, r5 ↔ r6, r7 ↔ r8), band contiguity, file sizes |
 | `npm run qa:render` | Headless render QA — zoom sweep, frame timing, stall + console-error gate |
+| `npm run qa:basemap` | Headless check of the night-lights basemap toggle (~10 min, not part of the gate) — georeference, luminance bound, lazy fetch, failed load, credits |
 | `npm run dev` | Vite dev server (http://localhost:5173) |
 | `npm run data` / `npm run data:tiles` | Regenerate r4/r6 Parquet + the derived r5 and r7 tiers / r8 tile pyramid (Python + DuckDB; `data:tiles` first — r7 is built from it) |
 
@@ -41,6 +42,9 @@ CDN-propagation retries).
   pipeline's `CAST(... AS FLOAT)`, not a data difference); every committed file < 100 MB
   (Pages limit). `npm run verify:data` asserts all of it against the committed files in ~60 s.
 - `public/data/**` is pipeline output — never hand-edit; change `pipeline/`, re-run, re-assert.
+- `public/basemap/*.jpg` (NASA Black Marble, opt-in night-lights toggle) is the output of
+  `scripts/texture/encode_black_marble.py` — never hand-edit; no pixel may be brighter than
+  the Inferno ramp's midpoint (data > basemap), and it is fetched only when the toggle is on.
 - Kontur source geometry is EPSG:3857; client centroids are EPSG:4326 (`always_xy`).
   The H3 index itself is CRS-free and drives hexagon geometry client-side.
 - Parquet over HTTP is fetched **whole**, never range reads — Pages/Fastly gzips `.parquet`
