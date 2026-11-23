@@ -40,22 +40,50 @@ REPORT  : evidence in the Done note + commit body; sprint summary → PROJECT_ST
 ## Queue
 
 Option A (decided 2026-11-18, see **Backlog**) is done — its five items and the
-follow-up that tightened the cap rule (tick 13) are under **Done**. The two items left
-here each wait on something outside the session: a texture file, and a pull request.
+follow-up that tightened the cap rule (tick 13) are under **Done**. First here is the
+night-lights basemap, unblocked 2026-11-23 when the owner permitted the texture download;
+the item after it still waits on a pull request.
 
-- [ ] Night-lights basemap toggle: swap the dark-ocean sphere texture for NASA Black Marble
-      (public domain) behind a `Controls.tsx` toggle; columns must stay legible
-      (data > basemap).
-      Waiting on the user (2026-11-18): the texture could not be fetched from the cloud
-      session. `eoimages.gsfc.nasa.gov` was allowed for the environment but its server
-      never completes a TLS handshake from that network (5 attempts, each closed after
-      14 s), so it was swapped for NASA's GIBS map service (`gibs.earthdata.nasa.gov`,
-      which serves the same Black Marble imagery over WMS) — and the download command
-      itself was then refused by the session's permission classifier. Either commit the
-      texture (an equirectangular Black Marble JPEG, ≤ 2 MB, e.g. 2048×1024) under
-      `public/` and say where it came from, or permit the download.
-      Accept: toggle works both ways at overview and r8 zoom; attribution line updated;
-      the texture is < 2 MB and lazy-loaded (not in the first-paint path); 0 console errors.
+- [ ] Night-lights basemap toggle: offer NASA's Black Marble as a second basemap behind a
+      `Controls.tsx` toggle, the current dark ocean + land fill staying the default.
+      Columns must stay legible (VISION: data > labels > basemap) — and night lights are
+      bright yellow exactly where the densest columns are, the top of the Inferno ramp, so
+      the lights have to be held down, not shown at full strength.
+      Source (owner permitted the download 2026-11-23): NASA GIBS, layer
+      `VIIRS_Black_Marble` ("Black Marble (VIIRS, Suomi NPP)", the 2016 composite), WMS
+      `https://gibs.earthdata.nasa.gov/wms/epsg4326/all/wms.cgi` GetMap, EPSG:4326, BBOX
+      -90,-180,90,180, 4096×2048 PNG, fetched 2026-11-23, sha256 `fb9ff079…28f1078` (the
+      `best` endpoint and some `all` backends answer with a MapServer error page — retry).
+      Equirectangular, north up, −180° at the left edge; the two edge columns match (mean
+      abs difference 0.96 of 255), so it wraps. NASA imagery is public domain; GIBS asks to
+      be acknowledged. The 5 MB PNG is not committed — the committed texture is a JPEG
+      encoded from it by a script kept in the repo.
+      Accept: (a) the toggle is a real control — a button with a pressed state, reachable
+      by keyboard, listed in the shortcuts dialog if it gets a key — and a headless check
+      turns it on and off at overview zoom and at an r8 zoom: on changes the canvas, off
+      restores the dark basemap pixel for pixel (same view, columns settled);
+      (b) georeferencing is proven, not eyeballed: the same check reads the rendered canvas
+      at the view centre for at least four places with no population columns, chosen so an
+      east–west mirror, a north–south flip and a longitude offset would each fail it (the
+      Greenland ice cap against the same latitude mirrored in longitude, Antarctica
+      against the Arctic Ocean, the Sahara against the mid-Pacific), and each agrees with
+      the texture's own pixel at that longitude and latitude;
+      (c) data > basemap as a stated, pinned number: with night lights on, no basemap
+      pixel is brighter than the Inferno colour at the ramp's midpoint (relative
+      luminance) — say how the lights are held down (a tone curve baked into the texture,
+      or a tint / desaturation at draw time) and what it does to the land tones, with
+      before/after screenshots over Europe–India at overview zoom and over a city at r8;
+      (d) the texture is < 2 MB, is requested only when the toggle is first turned on (a
+      network assertion: a cold load with the toggle off never requests it; turning it on
+      twice requests it once) and adds nothing to the entry chunk beyond the toggle
+      (report the entry chunk before / after); it must also work where
+      `MAX_TEXTURE_SIZE` is 2048, WebGL 2's minimum — say how;
+      (e) a failed texture request (blocked in the headless check) leaves the dark basemap
+      on screen, the toggle not pressed, a message the user can read, and no unhandled
+      rejection; (f) the credit line names NASA Black Marble / GIBS while night lights are
+      on, and the Kontur CC-BY credit is unchanged in both modes; (g) 0 console errors in
+      the render gate, and the default first paint (toggle off) is pixel-identical to
+      before the change on the gate's hero view.
       Gate: verify, qa:render.
 - [ ] Wire the render gate into CI: run `npm run qa:render` in `.github/workflows/ci.yml`
       against the dev server, uploading the report + screenshots as artifacts, and fail on
