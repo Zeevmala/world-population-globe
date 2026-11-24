@@ -34,6 +34,10 @@ RETRY   : one send-back per oracle — a red gate goes back to the same maker on
 BUDGET  : ≤ 12 ticks/run · 1 item/tick · ≤ 3 sub-agents/tick · strictly serial (items
           share files, and the render gate's timings are CPU-sensitive)
 STOP    : queue empty | blocked sentinel present | budget spent
+FLAGS   : maker and checker each report what they were told that was wrong, or had to
+          work out because nothing recorded it; the orchestrator appends those entries,
+          and the owner's rulings, to knowledge/INBOX.md — nobody edits the notes under
+          knowledge/ during a tick; whoever writes a queue item reads them first
 REPORT  : evidence in the Done note + commit body; sprint summary → PROJECT_STATE.md
 ```
 

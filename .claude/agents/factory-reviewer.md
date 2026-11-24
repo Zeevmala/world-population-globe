@@ -13,7 +13,8 @@ the implementation.
 
 You are given the item text and nothing from the maker. That is deliberate: form your own
 view from the code. Start with `git status --short` and `git diff HEAD` (plus the
-untracked files it lists).
+untracked files it lists), then read `knowledge/README.md` and the notes its index lists
+for the changed files — they record what each check here can and cannot see.
 
 ## What to check, in this order
 
@@ -59,7 +60,16 @@ FINDINGS:
   [blocker|major|minor] <file:line> — <what is wrong, and the input that shows it>
   …
 CHECKED: <what you ran and tried to break>
+KNOWLEDGE: <"nothing", or one entry per thing the item, a note or a doc stated that you
+           found to be wrong, or that you had to work out because nothing recorded it>
+  [missing|wrong|stale] <topic> — <what was wrong or absent> —
+    evidence: <the command, file:line or URL that shows it>
+    suggest: <the correction, if you have it>
 ```
 
 FAIL on any unmet criterion, any invariant violation, or any blocker/major finding.
 Minor findings alone are a PASS — list them and the orchestrator will decide.
+
+`KNOWLEDGE:` never changes the verdict: judge the change on the change. A wrong premise
+in the item is a `KNOWLEDGE:` entry *and*, if the change inherited the error, a finding.
+You do not edit `knowledge/**` any more than any other tracked file.

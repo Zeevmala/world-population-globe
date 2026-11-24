@@ -20,4 +20,8 @@ and re-runs the gate itself afterwards; the interactive, maker/checker form is `
    `## Blocked` in specs/TODO.md add a line starting
    `BLOCKED: <item> — <reason + what was tried + the stash name>`, commit only that
    state-file change, and stop.
-6. Exit after one item regardless of outcome.
+6. In that same commit (either outcome), append to `knowledge/INBOX.md` one entry per
+   thing you were told that was wrong or had to work out because nothing recorded it —
+   format and heading as in `.claude/commands/factory.md` step 7. Edit nothing else
+   under `knowledge/`.
+7. Exit after one item regardless of outcome.

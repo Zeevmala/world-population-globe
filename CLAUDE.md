@@ -7,7 +7,8 @@ Population (H3, CC-BY 4.0), in-browser SNAPPY Parquet via hyparquet, static GitH
 Anchor files: [VISION.md](VISION.md) north star · [docs/architecture.md](docs/architecture.md)
 locked decisions · [specs/TODO.md](specs/TODO.md) work queue + loop contract ·
 [PROMPT.md](PROMPT.md) per-tick iteration prompt · [PROJECT_STATE.md](PROJECT_STATE.md)
-sprint history / PM log. The factory: [`/factory`](.claude/commands/factory.md) orchestrates
+sprint history / PM log · [knowledge/](knowledge/README.md) what the work has taught, by
+topic (read the notes its index lists before touching those paths). The factory: [`/factory`](.claude/commands/factory.md) orchestrates
 a maker ([factory-implementer](.claude/agents/factory-implementer.md)) and a checker
 ([factory-reviewer](.claude/agents/factory-reviewer.md)) around `npm run gate`.
 
@@ -70,5 +71,8 @@ CDN-propagation retries).
   thin: the decision goes in a pure function, the test goes on the function.
 - The render gate drives the Vite dev server, which reloads on file changes — never edit
   the tree while `npm run gate` / `npm run qa:render` is running, and never run two at once.
+- A correction or a ruling the owner gives in a session goes into `knowledge/INBOX.md` at
+  once, in their words, as an `[owner]` entry — it is otherwise lost when the session ends.
+  Agents doing a queue item flag what was wrong or missing there; they never edit the notes.
 - Progress is marked only in `specs/TODO.md` (`[x]` / `BLOCKED:`); sprint-level summaries
   go to `PROJECT_STATE.md`. The agent forgets — the repo doesn't.
