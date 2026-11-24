@@ -8,9 +8,9 @@
  * frame took two seconds, that a tier crossing froze the main thread, or that the
  * canvas came back blank. This harness measures those directly:
  *
- *   · a zoom sweep across all three LOD bands over dense and sparse regions
+ *   · a zoom sweep across every LOD band in the manifest over dense and sparse regions
  *   · real rAF frame timing during scripted pans and zoom ramps
- *   · long-task / stall detection, with the 2.2 and 4.5 tier crossings instrumented
+ *   · long-task / stall detection, with every tier crossing instrumented (cold)
  *   · console + page errors, verbatim, failing the run
  *   · the 120k rendered-cells/frame invariant, read off the live deck.gl layer
  *   · a screenshot per sampled state, each decoded and scored so a blank one fails
@@ -25,7 +25,7 @@
  *   --port <n>            dev-server port (default 5199)
  *   --json <path>         write the JSON report here (default scripts/qa/out/render-qa.json)
  *   --baseline <path>     compare against a previous report; regressions fail the run
- *   --quick               5-step plan (one region, both crossings) for iterating
+ *   --quick               6-step plan (one region, every crossing, every tier reached)
  *   --out <dir>           screenshot directory (default scripts/qa/out)
  *   --no-screenshots      skip PNG capture
  *   --max-stall-ms <n>    also fail if a steady-state frame exceeds this (default: off,
@@ -39,9 +39,11 @@
  *   --frames / --anim-ms  per-sample animation length (default 24 frames, 1200 ms cap)
  *   --settle-timeout <n>  per-sample settle cap (default 60000)
  *
- * A full run samples 13 camera states plus the two cold tier crossings. On a GPU that is
- * quick; under SwiftShader on a contended box expect 6-12 minutes, so --quick exists for
- * iteration and --budget-ms bounds the worst case.
+ * The bands, crossings and sample zooms are derived from public/data/manifest.json — moved
+ * for the canvas and each region's latitude by the app's own tier selection
+ * (`src/lib/tierBands.ts`, imported, not re-derived) — and the deepest zoom from the app itself. With the four-tier manifest a full run samples 11
+ * camera states plus the three cold tier crossings (the run prints its plan's counts). On a GPU that is quick; under SwiftShader on a contended box expect 10-20
+ * minutes, so --quick (the gate's plan) exists and --budget-ms bounds the worst case.
  *
  * Exit: 0 pass · 1 regression/defect · 2 harness error.
  */
@@ -74,6 +76,9 @@ import {
   printSummary,
   worstStall,
 } from './report.mjs'
+import { MAX_ZOOM as APP_MAX_ZOOM } from '../../src/lib/camera.ts'
+// The app's own tier selection (pure, Node-importable): which tier a view wants on a canvas.
+import { tierEntry, wantedIndex } from '../../src/lib/tierBands.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = resolve(HERE, '..', '..')
@@ -86,41 +91,147 @@ const REGIONS = {
   ocean: { label: 'S-Pacific', longitude: -140, latitude: -30, density: 'sparse' },
 }
 
-/** Tier bands, from the manifest: overview < 2.2 ≤ mid < 4.5 ≤ r8. */
-function expectedTier(zoom) {
-  if (zoom < 2.2) return 'overview'
-  if (zoom < 4.5) return 'mid'
-  return 'r8'
+/**
+ * Tier bands, read from the committed manifest (`public/data/manifest.json`, written by
+ * `pipeline/tiers.py`) — never typed here, so the plan follows a re-band. Set in `main`.
+ * @type {{ lod: string, h3Res: number, approxKm: number, minZoom: number, maxZoom: number, tiled: boolean }[]}
+ */
+let BANDS = []
+
+/**
+ * The deepest zoom the camera allows: read from the running app (the store's
+ * `viewState.maxZoom`, which is `src/lib/camera.ts` MAX_ZOOM) once it has booted, and
+ * from that module itself when the target has no `__globe` handle. Set in `main`.
+ */
+let MAX_ZOOM = APP_MAX_ZOOM
+/** The desktop hero zoom (`src/store/useGlobeStore.ts`). */
+const HERO_ZOOM = 1.3
+
+/**
+ * The first-run cue (`src/components/FirstRunCue.tsx`) covers the middle of every shot.
+ * It is left to mount on boot — a fresh browser profile has never dismissed it — and is
+ * closed through its own Dismiss button before the first capture ({@link dismissCue}),
+ * so the gate renders it once and an error in it reaches the gate. `App` then remembers
+ * the dismissal in localStorage under `INTRO_KEY`, so it stays closed for the run.
+ *
+ * When it mounts (`App.tsx`): `introOpen` — localStorage[INTRO_KEY] !== 'seen' when App
+ * first rendered — AND the store's `status === 'ready'` (the overview has loaded); then
+ * the lazy `FirstRunCue` chunk is imported under a `Suspense` with no fallback. No timer
+ * is involved. The key is read from the source, so a bump of it (v1 → v2) is followed.
+ */
+function introKey(root) {
+  const src = readFileSync(join(root, 'src', 'App.tsx'), 'utf8')
+  const m = src.match(/const INTRO_KEY = '([^']+)'/)
+  if (!m) throw new Error('INTRO_KEY not found in src/App.tsx — update render_qa.mjs introKey()')
+  return m[1]
 }
 
-/** Angular half-extent of the viewport, mirroring `lib/lod.ts` — used to size a
- *  pan step so every zoom level gets a comparable amount of camera motion. */
+/** The cue's landmark (`FirstRunCue.tsx`). */
+const CUE_SELECTOR = 'section[aria-label="How to read this globe"]'
+/** The cue's lazy chunk: `/src/components/FirstRunCue.tsx` in dev, `assets/FirstRunCue-<hash>.js` built. */
+const CUE_CHUNK = /FirstRunCue/
+/**
+ * How long the cue may take to appear (and then to close) once it is due, counted only
+ * while the page is answering: SwiftShader blocks the main thread for 8–13 s per
+ * overview frame, and a poll that cannot run then is not the cue's fault. Both bounds
+ * must be exceeded to fail — 3 min of wall clock AND 60 polls the page answered.
+ */
+const CUE_WAIT_MS = 180_000
+const CUE_WAIT_POLLS = 60
+/** Set once the cue was seen to close and its dismissal was recorded (see `capture`). */
+let cueDismissed = false
+
+function loadBands(root) {
+  const manifest = JSON.parse(readFileSync(join(root, 'public', 'data', 'manifest.json'), 'utf8'))
+  return manifest.lods.map(({ lod, h3Res, approxKm, minZoom, maxZoom, tiled }) => ({ lod, h3Res, approxKm, minZoom, maxZoom, tiled: !!tiled }))
+}
+
+/**
+ * The canvas the harness drives (`--width` × `--height`, 900×560 by default; DPR 1). Tier
+ * selection depends on it and on the view's latitude (`src/lib/tierBands.ts`), so every
+ * expectation below asks the app's own function for this canvas and the region's
+ * latitude — on 900×560 the cap rule starts every tier 0.46–0.64 zoom later than the manifest's
+ * equator bands, and Tokyo's 35.68° N moves them about 0.27 zoom earlier again. Set in `main`.
+ */
+let CANVAS = { width: 900, height: 560 }
+
+/** The tier the app wants for a region at this zoom, on the harness canvas (no hysteresis). */
+function expectedTier(zoom, region) {
+  return BANDS[wantedIndex({ latitude: REGIONS[region].latitude, zoom }, CANVAS, BANDS)].lod
+}
+
+/** Where tier `lod` starts for a region on the harness canvas (the app's `tierEntry`). */
+function entryAt(lod, region) {
+  return tierEntry(BANDS, BANDS.findIndex((b) => b.lod === lod), REGIONS[region].latitude, CANVAS)
+}
+
+/** A zoom-scaled angular step — the old cull's `min(60, 180/2^zoom)` half-span, kept as it
+ *  was only so pan magnitudes stay comparable with recorded baselines — used to size a pan
+ *  step so every zoom level gets a comparable amount of camera motion. */
 const halfSpanDeg = (zoom) => Math.min(60, 180 / Math.pow(2, zoom))
+
+const round2 = (z) => Math.round(z * 100) / 100
+
+/** A cold crossing of each tier threshold, where it lies for this region: from just below it to just past it. */
+function crossingsFor(region) {
+  return BANDS.slice(1).map((b) => {
+    const at = entryAt(b.lod, region)
+    return {
+      type: 'crossing',
+      id: `cross-${b.lod}@${round2(at)}`,
+      region,
+      from: round2(at - 0.18),
+      to: round2(at + 0.17),
+      frames: 4,
+      lod: b.lod,
+    }
+  })
+}
+
+/** A zoom inside a tier's band for this region where that tier is unambiguously the wanted one. */
+function bandMiddle(lod, region) {
+  const i = BANDS.findIndex((x) => x.lod === lod)
+  const from = Math.max(entryAt(lod, region), -1)
+  const to = Math.min(i + 1 < BANDS.length ? entryAt(BANDS[i + 1].lod, region) : Infinity, MAX_ZOOM)
+  return round2((from + to) / 2)
+}
 
 /**
  * The run plan, ordered so each tier crossing is measured COLD — before any
- * sample has warmed that tier's data. Crossing 2.2 pays the 31 MB mid parquet
- * parse; crossing 4.5 pays the first r8 tile burst. Sampling those zooms first
- * would hide exactly the stall we are hunting.
+ * sample has warmed that tier's data. Crossing into r5 pays the 6 MB r5 parse, into
+ * mid the 31 MB mid parse, into r7 the first r2-tile burst, into r8 the first r3-tile
+ * burst while r7 is on screen. Sampling those zooms first would hide exactly the stall
+ * we are hunting.
+ *
+ * --quick (the gate's plan) is one cold crossing per tier threshold (whose settled far
+ * side is checked against the cell cap — the widest, most cell-heavy window each tier
+ * gets) plus the hero and a sample inside each of the two finest bands: with today's
+ * five tiers, seven steps — hero, → r5, → mid, → r7, r7 sample, → r8, r8 sample. Every
+ * tier is reached once. The full plan adds a sample in every band, the deep end of the
+ * zoom range, a second metro and an empty ocean.
  */
 function buildPlan(quick) {
+  const tokyo = crossingsFor('tokyo')
+  const at = (lod) => tokyo.find((c) => c.lod === lod)
+  const sample = (region, zoom) => ({ type: 'sample', region, zoom })
+  const finest = BANDS[BANDS.length - 1].lod
   if (quick) {
     return [
-      { type: 'sample', region: 'tokyo', zoom: 1.3 },
-      { type: 'crossing', id: 'cross-2.2', region: 'tokyo', from: 2.0, to: 2.45, frames: 4 },
-      { type: 'sample', region: 'tokyo', zoom: 2.3 },
-      { type: 'crossing', id: 'cross-4.5', region: 'tokyo', from: 4.3, to: 4.7, frames: 4 },
-      { type: 'sample', region: 'tokyo', zoom: 4.6 },
+      sample('tokyo', HERO_ZOOM),
+      ...tokyo.filter((c) => c.lod !== finest),
+      sample('tokyo', bandMiddle(BANDS[BANDS.length - 2].lod, 'tokyo')),
+      at(finest),
+      sample('tokyo', bandMiddle(finest, 'tokyo')),
     ]
   }
-  const steps = []
-  for (const zoom of [0.5, 1.3, 2.0]) steps.push({ type: 'sample', region: 'tokyo', zoom })
-  steps.push({ type: 'crossing', id: 'cross-2.2', region: 'tokyo', from: 2.0, to: 2.45, frames: 4 })
-  for (const zoom of [2.3, 3.0, 4.0]) steps.push({ type: 'sample', region: 'tokyo', zoom })
-  steps.push({ type: 'crossing', id: 'cross-4.5', region: 'tokyo', from: 4.3, to: 4.7, frames: 4 })
-  for (const zoom of [4.6, 5.5, 6.5]) steps.push({ type: 'sample', region: 'tokyo', zoom })
-  for (const zoom of [2.3, 5.5]) steps.push({ type: 'sample', region: 'cairo', zoom })
-  for (const zoom of [1.3, 4.6]) steps.push({ type: 'sample', region: 'ocean', zoom })
+  const steps = [sample('tokyo', 0.5), sample('tokyo', HERO_ZOOM)]
+  for (const b of BANDS.slice(1)) {
+    steps.push(at(b.lod))
+    steps.push(sample('tokyo', bandMiddle(b.lod, 'tokyo')))
+  }
+  steps.push(sample('tokyo', MAX_ZOOM))
+  for (const lod of BANDS.slice(1).map((b) => b.lod)) steps.push(sample('cairo', bandMiddle(lod, 'cairo')))
+  steps.push(sample('ocean', HERO_ZOOM), sample('ocean', bandMiddle(finest, 'ocean')))
   return steps
 }
 
@@ -212,7 +323,7 @@ function gitInfo(root) {
 /** Has the tier we expect at this zoom actually got data behind it? */
 function tierAvailable(state, tier) {
   if (!state || state.error) return false
-  if (tier === 'r8') return state.r8Cells > 0
+  if (BANDS.find((b) => b.lod === tier)?.tiled) return ((state.tiledCells || {})[tier] || 0) > 0
   return (state.loadedLods || []).includes(tier)
 }
 
@@ -253,9 +364,109 @@ async function settleAt(page, ctx, { tier, timeoutMs, quietMs = 5000 }) {
   }
 }
 
+/**
+ * Mount the first-run cue once and close it as a visitor does, deterministically: wait
+ * for the condition that makes it due (see {@link introKey}), then for the cue itself,
+ * click its own Dismiss button, and confirm it detached and `App` recorded the dismissal.
+ * Every probe is a `page.evaluate`, which runs only when the page's main thread is free —
+ * so a long software-rasterized frame stretches the wait instead of failing it.
+ *
+ * Outcomes:
+ *  - its chunk request failed or returned an error status → FAIL (lazy chunk broken);
+ *  - a page error while it was due, and it never mounted → FAIL (it threw while
+ *    rendering — `React.lazy` / the component — and took the tree down with it);
+ *  - due, the page answering, and still not mounted past both bounds → FAIL (it no longer
+ *    mounts on a fresh profile);
+ *  - its Dismiss button did not detach it, or the dismissal was not stored → FAIL;
+ *  - the app never reached `ready` (or reported `error`) → not judged here: the cue is not
+ *    due, and the boot failure is the run's own failure;
+ *  - storage blocked (the cue then reopens every visit by design) → WARN, closed anyway.
+ */
+async function dismissCue(page, findings, { key, pageErrors, cueNet }) {
+  const probe = () =>
+    page.evaluate(
+      ({ sel, key }) => {
+        const store = window.__globe
+        const status = store ? store.getState().status : 'ready' // built target: no handle; due on load
+        let seen
+        try {
+          seen = localStorage.getItem(key)
+        } catch {
+          seen = 'blocked'
+        }
+        return { status, seen, mounted: !!document.querySelector(sel) }
+      },
+      { sel: CUE_SELECTOR, key },
+    )
+  const errorsBefore = pageErrors.length
+  /** Poll until `done(state)`; null when both bounds ran out (or the app failed). */
+  const until = async (done) => {
+    const t0 = Date.now()
+    let polls = 0
+    for (;;) {
+      const st = await probe().catch(() => null)
+      if (st) {
+        polls++
+        if (done(st)) return st
+        if (st.status === 'error') return st
+      }
+      if (cueNet.failed.length) return null
+      if (Date.now() - t0 > CUE_WAIT_MS && polls >= CUE_WAIT_POLLS) return null
+      await new Promise((r) => setTimeout(r, 250))
+    }
+  }
+
+  const due = await until((st) => st.status === 'ready')
+  if (!due || due.status !== 'ready') {
+    if (cueNet.failed.length) findings.failures.push(`the first-run cue's chunk failed to load: ${cueNet.failed.join(' | ')}`)
+    else log(`first-run cue not judged: the app did not reach ready (status=${due ? due.status : 'unknown'})`)
+    return
+  }
+  if (due.seen === 'seen') {
+    findings.failures.push('the first-run cue was already marked seen on a fresh profile — it was never shown')
+    return
+  }
+  const shown = await until((st) => st.mounted)
+  if (!shown || !shown.mounted) {
+    const thrown = pageErrors.slice(errorsBefore).map((e) => e.text)
+    if (cueNet.failed.length) findings.failures.push(`the first-run cue's chunk failed to load: ${cueNet.failed.join(' | ')}`)
+    else if (thrown.length) findings.failures.push(`the first-run cue never mounted — page error while it was due: ${thrown.join(' | ')}`)
+    else findings.failures.push(`the first-run cue never mounted although it was due (status ready, not seen; chunk requested ${cueNet.requested}×)`)
+    return
+  }
+  // Actionability waits on the page too, so the click gets the same ceiling.
+  await page
+    .locator(CUE_SELECTOR)
+    .getByRole('button', { name: 'Dismiss' })
+    .click({ timeout: CUE_WAIT_MS })
+    .catch((err) => findings.failures.push(`the first-run cue's Dismiss button could not be clicked: ${err.message.split('\n')[0]}`))
+  const closed = await until((st) => !st.mounted && st.seen !== null)
+  if (!closed || closed.mounted) {
+    findings.failures.push('the first-run cue did not close through its Dismiss button')
+  } else if (closed.seen === 'blocked') {
+    findings.warnings.push('first-run cue: localStorage is blocked, so its dismissal cannot be remembered')
+  } else if (closed.seen !== 'seen') {
+    findings.failures.push(`the first-run cue closed but its dismissal was not stored (localStorage[${key}] = ${closed.seen})`)
+  } else {
+    cueDismissed = true
+    log('first-run cue mounted, dismissed through its own button, dismissal stored')
+  }
+}
+
 /** Screenshot + decode + score. A PNG that scores blank is a failure, not a file. */
 async function capture(page, opts, id, findings) {
   if (!opts.screenshots) return null
+  // Unreachable in a healthy run: `dismissCue` closed the cue and saw its dismissal stored.
+  // A cue on screen after that means `App` ignored its own stored dismissal — a real bug,
+  // so a FAILURE. If `dismissCue` already failed (it never saw the cue close), that is the
+  // failure on record; the cue is only closed here so it does not spoil the shot.
+  const cue = page.locator(CUE_SELECTOR)
+  if (await cue.count()) {
+    if (cueDismissed) findings.failures.push(`${id}: the first-run cue reappeared after its dismissal was stored`)
+    else findings.warnings.push(`${id}: the first-run cue was on screen (its boot-time dismissal failed — see that failure) — closed before capture`)
+    await cue.getByRole('button', { name: 'Dismiss' }).click().catch(() => {})
+    await page.waitForSelector(CUE_SELECTOR, { state: 'detached', timeout: 5000 }).catch(() => {})
+  }
   const path = join(opts.out, `${id.replace(/[^a-z0-9._-]+/gi, '-')}.png`)
   await page.screenshot({ path })
   const score = await scorePngFile(path)
@@ -269,6 +480,12 @@ async function capture(page, opts, id, findings) {
 
 async function main() {
   const opts = parseArgs(process.argv.slice(2))
+  BANDS = loadBands(opts.url ? REPO_ROOT : opts.root)
+  CANVAS = { width: opts.width, height: opts.height }
+  log(`bands (manifest): ${BANDS.map((b) => `${b.lod} ${b.minZoom}–${b.maxZoom}`).join(' · ')}`)
+  for (const region of Object.keys(REGIONS)) {
+    log(`bands (app, ${CANVAS.width}×${CANVAS.height} over ${REGIONS[region].label}): ${BANDS.slice(1).map((b) => `${b.lod} ${round2(entryAt(b.lod, region))}`).join(' · ')}`)
+  }
   mkdirSync(opts.out, { recursive: true })
   mkdirSync(dirname(opts.json), { recursive: true })
 
@@ -322,6 +539,14 @@ async function main() {
     else if (msg.type() === 'warning') consoleWarnings.push(entry)
   })
   page.on('pageerror', (err) => pageErrors.push({ phase: ctx.phase, text: err.message }))
+  // The cue's lazy chunk, watched from the first request (it is fetched as soon as the app is ready).
+  const cueNet = { requested: 0, failed: [] }
+  page.on('request', (req) => {
+    if (CUE_CHUNK.test(req.url())) cueNet.requested++
+  })
+  page.on('response', (res) => {
+    if (CUE_CHUNK.test(res.url()) && res.status() >= 400) cueNet.failed.push(`${res.status()} ${res.url()}`)
+  })
   page.on('request', (req) => {
     if (/\.(parquet|json|geojson)(\?|$)/.test(req.url())) {
       ctx.inFlight += 1
@@ -337,6 +562,7 @@ async function main() {
   page.on('requestfinished', settleRequest)
   page.on('requestfailed', (req) => {
     settleRequest(req)
+    if (CUE_CHUNK.test(req.url())) cueNet.failed.push(`${req.failure()?.errorText} ${req.url()}`)
     findings.warnings.push(`request failed (${ctx.phase}): ${req.url()} — ${req.failure()?.errorText}`)
   })
 
@@ -357,6 +583,11 @@ async function main() {
       'window.__globe / window.__deck are absent — this is a production build, so tier/cell oracles and camera driving are unavailable (see LIMITATIONS).',
     )
   }
+  if (hasHandles) {
+    const appMax = await page.evaluate(() => window.__globe.getState().viewState.maxZoom)
+    if (Number.isFinite(appMax)) MAX_ZOOM = appMax
+  }
+  log(`max zoom: ${MAX_ZOOM} (${hasHandles ? 'from the running app' : 'from src/lib/camera.ts'})`)
   const bootMs = Date.now() - bootAt
   const bootLongtasks = await page.evaluate(collectLongtasks)
   log(`boot: ${bootMs} ms, handles=${hasHandles}, longtask support=${bootLongtasks.supported}`)
@@ -371,8 +602,15 @@ async function main() {
     )
   }
 
+  // ---- the first-run cue: mounted once, closed by its own button -----------
+  ctx.phase = 'first-run-cue'
+  await dismissCue(page, findings, { key: introKey(opts.url ? REPO_ROOT : opts.root), pageErrors, cueNet })
+
   // ---- run the plan -------------------------------------------------------
   const plan = buildPlan(opts.quick)
+  log(
+    `plan: ${plan.filter((st) => st.type === 'sample').length} sampled state(s) + ${plan.filter((st) => st.type === 'crossing').length} tier crossing(s)`,
+  )
   const samples = []
   const crossings = []
   let truncated = null
@@ -387,7 +625,7 @@ async function main() {
     if (step.type === 'sample') {
       const id = `${step.region}@z${step.zoom.toFixed(2)}`
       ctx.phase = id
-      log(`· ${id} (${region.label}, ${region.density}, expect ${expectedTier(step.zoom)})`)
+      log(`· ${id} (${region.label}, ${region.density}, expect ${expectedTier(step.zoom, step.region)})`)
       const errorsBefore = consoleErrors.length + pageErrors.length
 
       await page.evaluate(markPhase)
@@ -400,7 +638,7 @@ async function main() {
 
       const timeoutMs = region.density === 'sparse' ? Math.min(opts.settleTimeoutMs, 20_000) : opts.settleTimeoutMs
       const settle = driveable
-        ? await settleAt(page, ctx, { tier: expectedTier(step.zoom), timeoutMs })
+        ? await settleAt(page, ctx, { tier: expectedTier(step.zoom, step.region), timeoutMs })
         : { ms: 0, tierReached: null, quiet: null, worstStallMs: 0, longtasks: [], state: {} }
 
       const state = driveable ? settle.state : await page.evaluate(readAppState).catch(() => ({}))
@@ -424,8 +662,8 @@ async function main() {
           `P0 invariant: ${id} rendered ${renderedCells} cells/frame, over the ${MAX_RENDERED_CELLS} cap (tier ${tier})`,
         )
       }
-      if (driveable && tier !== expectedTier(step.zoom)) {
-        const note = `${id}: active tier is "${tier}", expected "${expectedTier(step.zoom)}"${region.density === 'sparse' ? ' (sparse region — r8 pyramid has no tile here, so the fallback is correct)' : ''}`
+      if (driveable && tier !== expectedTier(step.zoom, step.region)) {
+        const note = `${id}: active tier is "${tier}", expected "${expectedTier(step.zoom, step.region)}"${region.density === 'sparse' ? ' (sparse region — r8 pyramid has no tile here, so the fallback is correct)' : ''}`
         if (region.density === 'sparse') findings.warnings.push(note)
         else findings.failures.push(note)
       }
@@ -445,7 +683,7 @@ async function main() {
         longitude: region.longitude,
         latitude: region.latitude,
         zoom: step.zoom,
-        expectedTier: expectedTier(step.zoom),
+        expectedTier: expectedTier(step.zoom, step.region),
         tier,
         tierCells: state.tierCells ?? null,
         renderedCells,
@@ -480,7 +718,7 @@ async function main() {
       log(`· ${step.id} (${region.label}: zoom ${step.from} → ${step.to}, cold)`)
       await page.evaluate(markPhase)
       await page.evaluate(setCamera, { longitude: region.longitude, latitude: region.latitude, zoom: step.from })
-      const before = await settleAt(page, ctx, { tier: expectedTier(step.from), timeoutMs: opts.settleTimeoutMs })
+      const before = await settleAt(page, ctx, { tier: expectedTier(step.from, step.region), timeoutMs: opts.settleTimeoutMs })
 
       await page.evaluate(markPhase)
       // A ramp frame can cost seconds here, and the wall-clock cap is only checked
@@ -498,7 +736,7 @@ async function main() {
       })
       const rampReachedZoom = anim.endView ? Math.round(anim.endView.zoom * 1000) / 1000 : null
       await page.evaluate(setCamera, { longitude: region.longitude, latitude: region.latitude, zoom: step.to })
-      const after = await settleAt(page, ctx, { tier: expectedTier(step.to), timeoutMs: opts.settleTimeoutMs })
+      const after = await settleAt(page, ctx, { tier: expectedTier(step.to, step.region), timeoutMs: opts.settleTimeoutMs })
       const frame = animationStats(anim)
       const stall = Math.max(worstStall(anim.deltas, anim.longtasks), after.worstStallMs)
       const shot = await capture(page, opts, step.id, findings)
@@ -513,9 +751,9 @@ async function main() {
       // camera has crossed its threshold is a defect, not a slow machine. It is
       // reported rather than failed because it is a standing bug, not a regression —
       // see the note in the report's `findings`.
-      if (!after.tierReached && after.state.tier !== expectedTier(step.to)) {
+      if (!after.tierReached && after.state.tier !== expectedTier(step.to, step.region)) {
         findings.warnings.push(
-          `${step.id}: the "${expectedTier(step.to)}" tier never became active after the crossing (still "${after.state.tier}" after ${Math.round(after.ms)} ms). Check the request log for this phase: no tile fetch means the streaming effect short-circuited.`,
+          `${step.id}: the "${expectedTier(step.to, step.region)}" tier never became active after the crossing (still "${after.state.tier}" after ${Math.round(after.ms)} ms). Check the request log for this phase: no tile fetch means the streaming effect short-circuited.`,
         )
       }
 
@@ -541,6 +779,28 @@ async function main() {
         `    ${before.state.tier} → ${after.state.tier}, ramp reached z${rampReachedZoom}, frames=${frame.frames} max=${frame.max}ms worst stall=${stall}ms settle=${after.ms}ms(tier reached: ${after.tierReached})`,
       )
     }
+  }
+
+  // Every tier the plan sends a dense region into must actually have been on screen at
+  // least once (a sample's settled tier or a crossing's far side). A tier that never
+  // shows up anywhere in the run is a band the app cannot reach, not a slow machine — and
+  // a run that ran out of --budget-ms before reaching it has not shown it either, so a
+  // truncated run fails here too rather than passing on the steps it happened to finish.
+  if (driveable) {
+    const planned = new Set(
+      plan
+        .filter((st) => REGIONS[st.region].density === 'dense')
+        .map((st) => expectedTier(st.type === 'sample' ? st.zoom : st.to, st.region)),
+    )
+    const reached = new Set([...samples.map((x) => x.tier), ...crossings.map((c) => c.tierAfter)])
+    for (const t of planned) {
+      if (!reached.has(t)) {
+        findings.failures.push(
+          `plan coverage: the "${t}" tier was never active in any step of the run${truncated ? ` (${truncated})` : ''}`,
+        )
+      }
+    }
+    log(`tiers reached: ${[...planned].map((t) => `${t} ${reached.has(t) ? 'yes' : 'NO'}`).join(' · ')}`)
   }
 
   ctx.phase = 'teardown'

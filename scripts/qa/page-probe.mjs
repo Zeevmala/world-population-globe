@@ -48,12 +48,12 @@ export function appReady() {
 /**
  * Read the live tier + rendered-cell count.
  *
- * Tier resolution prefers the store's own `activeLod` (the tier the layer hook
- * published) and falls back to a faithful replica of `selectActive` for builds
- * that don't expose it — so this keeps working across the render changes landing
- * in parallel. `renderedCells` is the population layer's actual `data.length`,
- * i.e. the post-cull count deck.gl will draw, which is what the 120k invariant
- * is about.
+ * Tier resolution reads the store's own `activeLod` (the tier the layer hook
+ * published); before the first publish, the finest loaded whole tier whose band
+ * is reached. The tier's cells come from `data` (whole tiers) or `tiles` (each
+ * tiled tier's merged set). `renderedCells` is the population layer's actual
+ * `data.length`, i.e. the post-cull count deck.gl will draw, which is what the
+ * 120k invariant is about.
  */
 export function readAppState() {
   const store = window.__globe
@@ -61,29 +61,34 @@ export function readAppState() {
   if (!store) return { error: 'window.__globe is missing (is this a dev build?)' }
   const state = store.getState()
   const manifest = state.manifest
+  const tiles = state.tiles || {}
 
   let tier = null
   if (manifest) {
     if (typeof state.activeLod === 'string' && state.activeLod) {
       tier = state.activeLod
     } else {
-      const r8 = manifest.lods.find((l) => l.lod === 'r8')
-      if (r8 && state.viewState.zoom >= r8.minZoom && state.r8Data && state.r8Data.h3.length > 0) {
-        tier = 'r8'
-      } else {
-        let chosen = null
-        for (const entry of manifest.lods) {
-          if (state.viewState.zoom >= entry.minZoom && state.data[entry.lod]) chosen = entry.lod
-        }
-        if (!chosen) {
-          const first = manifest.lods.find((l) => state.data[l.lod])
-          chosen = first ? first.lod : null
-        }
-        tier = chosen
+      // Before the layer has published `activeLod`: the finest LOADED tier at or below the
+      // one the app's own selection wants for this view and canvas (`src/lib/tierBands.ts`
+      // `wantedIndex`, exposed in dev builds as `__globeTiers`) — never the manifest's
+      // nominal bands, which the app no longer selects by.
+      let chosen = null
+      const select = window.__globeTiers
+      const wanted = select ? select.wantedIndex(state.viewState, state.selectionCanvas ?? state.canvas, manifest.lods) : manifest.lods.length - 1
+      manifest.lods.forEach((entry, i) => {
+        if (i <= wanted && state.data[entry.lod]) chosen = entry.lod
+      })
+      if (!chosen) {
+        const first = manifest.lods.find((l) => state.data[l.lod])
+        chosen = first ? first.lod : null
       }
+      tier = chosen
     }
   }
-  const tierSource = tier === 'r8' ? state.r8Data : tier ? state.data[tier] : null
+  const tierSource = tier ? (state.data[tier] || (tiles[tier] && tiles[tier].data) || null) : null
+  // Merged cells per tiled tier (0 until its stream publishes some).
+  const tiledCells = {}
+  for (const [lod, set] of Object.entries(tiles)) tiledCells[lod] = set && set.data ? set.data.h3.length : 0
   const layers = deck && deck.props && Array.isArray(deck.props.layers) ? deck.props.layers : []
   const described = layers
     .filter(Boolean)
@@ -109,7 +114,7 @@ export function readAppState() {
     tier,
     tierCells: tierSource ? tierSource.h3.length : null,
     loadedLods: Object.keys(state.data),
-    r8Cells: state.r8Data ? state.r8Data.h3.length : 0,
+    tiledCells,
     renderedCells: population ? population.count : null,
     populationLayerId: population ? population.id : null,
     layers: described,
@@ -214,8 +219,7 @@ export function setCamera(target) {
     longitude: target.longitude,
     latitude: target.latitude,
     zoom: target.zoom,
-    minZoom: -1,
-    maxZoom: 7,
+    // minZoom / maxZoom come from the store's own view (src/lib/camera.ts) via the spread.
   })
   return performance.now()
 }

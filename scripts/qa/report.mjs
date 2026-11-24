@@ -195,10 +195,16 @@ export function compareToBaseline(report, baseline, baselinePath, factor = 3) {
   const deltas = []
   const failures = []
   const warnings = []
+  const unmatched = []
 
   for (const s of report.samples) {
     const b = byId.get(s.id)
-    if (!b) continue
+    // A baseline from another plan (e.g. before a re-band moved the sample zooms) has
+    // no counterpart for some samples: skip those, and say so, rather than fail.
+    if (!b) {
+      unmatched.push(s.id)
+      continue
+    }
     const p50 = s.frame.p50
     const p95 = s.frame.p95
     const basep95 = b.frame.p95
@@ -235,5 +241,11 @@ export function compareToBaseline(report, baseline, baselinePath, factor = 3) {
     if (!baseErrors.has(e.text)) failures.push(`new console.error not in baseline: ${e.text}`)
   }
 
-  return { baselinePath, factor, deltas, failures, warnings }
+  if (unmatched.length) {
+    warnings.push(
+      `${unmatched.length} of ${report.samples.length} sample(s) have no counterpart in the baseline and were not compared: ${unmatched.join(', ')}`,
+    )
+  }
+
+  return { baselinePath, factor, deltas, failures, warnings, unmatched }
 }

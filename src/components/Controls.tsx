@@ -1,3 +1,6 @@
+import { MAX_ZOOM, MIN_ZOOM } from '../lib/camera'
+import { effectiveBands } from '../lib/tierBands'
+import { bandsFor, type LadderBand } from '../lib/zoomLadder'
 import { useGlobeStore } from '../store/useGlobeStore'
 import { HudButton } from './HudButton'
 import {
@@ -6,53 +9,22 @@ import {
   IconHelp,
   IconLink,
   IconMinus,
+  IconMoon,
   IconPause,
   IconPlay,
   IconPlus,
 } from './icons'
 
-/** Zoom step per +/− press — a few presses span overview → mid → r8. */
+/** Zoom step per +/− press — about two presses per tier band (22 km → 9 km → 3 km → 1 km → 400 m). */
 export const ZOOM_STEP = 0.7
 
 export type ShareState = 'idle' | 'copied' | 'failed'
 
-/** Nominal cell edge as a human label: 22 → "22 km", 0.4 → "400 m". */
-function cellLabel(km: number): string {
-  return km >= 1 ? `${Math.round(km)} km` : `${Math.round(km * 1000)} m`
-}
-
-interface Band {
-  lod: string
-  label: string
-  /** Fractions of the ladder height, 0 = min zoom (bottom), 1 = max zoom (top). */
-  from: number
-  to: number
-}
-
 /**
- * The LOD bands as ladder fractions. Derived from the manifest (not hard-coded), so the
- * ladder keeps telling the truth if the pipeline re-bands the tiers.
- */
-function bandsFor(
-  lods: { lod: string; approxKm: number; minZoom: number; maxZoom: number }[],
-  min: number,
-  max: number,
-): Band[] {
-  const span = max - min
-  if (span <= 0) return []
-  return lods
-    .map((l) => ({
-      lod: l.lod,
-      label: cellLabel(l.approxKm),
-      from: (Math.max(min, l.minZoom) - min) / span,
-      to: (Math.min(max, l.maxZoom) - min) / span,
-    }))
-    .filter((b) => b.to > b.from)
-}
-
-/**
- * Vertical zoom ladder: shows *where in the scale* the camera is (globe → 3 km → 400 m)
- * rather than just offering two anonymous buttons. The painted ladder is `aria-hidden`;
+ * Vertical zoom ladder: shows *where in the scale* the camera is (globe → 9 km → 3 km → 1 km → 400 m)
+ * rather than just offering two anonymous buttons. It is `h-40` (160 px): five tiers about
+ * 1.4 zoom levels apart need ~14.5 px per zoom level to keep their labels two label-heights
+ * apart over the −1 … 10 range (`zoomLadder.test.ts`). The painted ladder is `aria-hidden`;
  * a transparent native range input on top carries the label, value, drag and arrow-key
  * semantics, so the control is a real slider for keyboard and screen-reader users.
  */
@@ -67,7 +39,7 @@ function ZoomLadder({
   zoom: number
   min: number
   max: number
-  bands: Band[]
+  bands: LadderBand[]
   activeLod: string | null
   onZoom: (z: number) => void
 }) {
@@ -75,7 +47,7 @@ function ZoomLadder({
   const active = bands.find((b) => b.lod === activeLod)
 
   return (
-    <div className="relative hidden h-32 w-full items-stretch gap-1.5 rounded px-0.5 has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-white/70 sm:flex">
+    <div className="relative hidden h-40 w-full items-stretch gap-1.5 rounded px-0.5 has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-white/70 sm:flex">
       {/* Scale labels, one per tier, parked at each band's midpoint. */}
       <div className="relative w-9 shrink-0" aria-hidden="true">
         {bands.map((b) => (
@@ -98,7 +70,7 @@ function ZoomLadder({
             key={b.lod}
             style={{ bottom: `${b.from * 100}%`, height: `calc(${(b.to - b.from) * 100}% - 2px)` }}
             className={`absolute inset-x-0 rounded-full ${
-              ['bg-white/12', 'bg-white/20', 'bg-white/30'][i] ?? 'bg-white/20'
+              ['bg-white/12', 'bg-white/18', 'bg-white/24', 'bg-white/30', 'bg-white/36'][i] ?? 'bg-white/20'
             }`}
           />
         ))}
@@ -144,16 +116,25 @@ export function Controls({ onShowHelp, onShare, shareState }: ControlsProps) {
   const flyTo = useGlobeStore((s) => s.flyTo)
   const manifest = useGlobeStore((s) => s.manifest)
   // The tier actually on screen, published by the layer — not re-derived from zoom here.
-  // Zoom alone would light "400 m" the instant the camera passes 4.5, while the globe is
+  // Zoom alone would light "400 m" the instant the camera passes the r8 band, while the globe is
   // still drawing 3 km cells because the r8 tiles have not merged yet (and it would ignore
   // the LOD hysteresis band). The ladder and the legend must name the same tier.
   const activeLod = useGlobeStore((s) => s.activeLod)
   // Primitive selectors: the rail re-renders on zoom, not on every rotation frame.
   const zoom = useGlobeStore((s) => s.viewState.zoom)
-  const minZoom = useGlobeStore((s) => s.viewState.minZoom ?? -1)
-  const maxZoom = useGlobeStore((s) => s.viewState.maxZoom ?? 7)
+  const minZoom = useGlobeStore((s) => s.viewState.minZoom ?? MIN_ZOOM)
+  const maxZoom = useGlobeStore((s) => s.viewState.maxZoom ?? MAX_ZOOM)
+  const basemap = useGlobeStore((s) => s.basemap)
+  const toggleBasemap = useGlobeStore((s) => s.toggleBasemap)
+  const nightPressed = basemap.want === 'night'
+  const nightLoading = nightPressed && basemap.texture === 'loading'
 
-  const bands = manifest ? bandsFor(manifest.lods, minZoom, maxZoom) : []
+  // Where the tiers switch for this view (`tierBands.ts`): this canvas (as selection reads it,
+  // `selectionCanvas.ts`), this latitude — rounded to 0.5° so a drag re-renders the rail only
+  // when a band can visibly move.
+  const canvas = useGlobeStore((s) => s.selectionCanvas)
+  const lat = useGlobeStore((s) => Math.round(s.viewState.latitude * 2) / 2)
+  const bands = manifest ? bandsFor(effectiveBands(manifest.lods, lat, canvas), minZoom, maxZoom) : []
 
   // Mirrors the store's load-time framing (portrait needs a tighter hero zoom).
   const home = () => flyTo(25, 20, window.innerHeight > window.innerWidth * 1.4 ? 1.9 : 1.3)
@@ -171,6 +152,17 @@ export function Controls({ onShowHelp, onShare, shareState }: ControlsProps) {
         </HudButton>
         <HudButton label="Reset view" shortcut="H" onClick={home}>
           <IconGlobe />
+        </HudButton>
+        {/* Pressed = asked for. While the texture loads the dark basemap stays and the
+            button says so; a failed load un-presses it and the alert below explains. */}
+        <HudButton
+          label={nightLoading ? 'Night lights (loading…)' : 'Night lights'}
+          shortcut="N"
+          pressed={nightPressed}
+          busy={nightLoading}
+          onClick={toggleBasemap}
+        >
+          <IconMoon />
         </HudButton>
         <HudButton
           label={
@@ -209,6 +201,12 @@ export function Controls({ onShowHelp, onShare, shareState }: ControlsProps) {
           <IconHelp />
         </HudButton>
       </div>
+
+      {basemap.error ? (
+        <p role="alert" className="hud-panel max-w-52 px-2.5 py-1.5 text-[11px] leading-snug text-white/85">
+          {basemap.error}
+        </p>
+      ) : null}
 
       {/* Copy feedback is visual (icon + tooltip) and announced, since the icon swap
           alone is invisible to a screen-reader user. */}

@@ -15,6 +15,9 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run typecheck
-      - run: npm run lint
-      - run: npm run build
+      # eslint → unit tests → tsc -b → vite build: the same single exit code as local.
+      - run: npm run verify
+      # Σ-pop, H3 roll-up, CRS bounds and per-file size over the committed data (~20 s).
+      - run: npm run verify:data
+      # specs/TODO.md is the factory's state file — a malformed queue halts or misleads it.
+      - run: npm run queue -- lint

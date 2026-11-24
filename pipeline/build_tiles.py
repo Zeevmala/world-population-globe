@@ -37,11 +37,13 @@ from kontur_common import (
     download,
     log,
 )
+from tiers import TIER_BY_LOD, apply_bands, bands
 
 TAG = "build_tiles"
-H3_RES = 8
-APPROX_KM = 0.4
-MIN_ZOOM = 4.5
+H3_RES = TIER_BY_LOD["r8"].h3_res
+APPROX_KM = TIER_BY_LOD["r8"].approx_km
+# Band from the shared tier table (tiers.py) — never typed here.
+MIN_ZOOM, MAX_ZOOM = bands()["r8"]
 MAX_FILE_BYTES = 95 * 1024 * 1024  # stay under GitHub's 100 MB hard limit
 
 R8_URL = f"{S3}/kontur_population_20231101.gpkg.gz"
@@ -174,14 +176,14 @@ def _update_manifest(pres: int, cell_count: int, max_pop: float, sum_pop: float)
         "h3Res": H3_RES,
         "approxKm": APPROX_KM,
         "minZoom": MIN_ZOOM,
-        "maxZoom": 24,
+        "maxZoom": MAX_ZOOM,
         "cellCount": cell_count,
         "maxPopulation": max_pop,
         "sumPopulation": sum_pop,
     }
     lods = [e for e in manifest.get("lods", []) if e.get("lod") != "r8"]
     lods.append(entry)
-    manifest["lods"] = lods
+    manifest["lods"] = apply_bands(lods)
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     log(TAG, f"updated {manifest_path.relative_to(ROOT)} with tiled r8 entry")
 

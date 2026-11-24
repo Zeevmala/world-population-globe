@@ -4,7 +4,7 @@
   "license": "CC-BY 4.0",
   "attribution": "\u00a9 Kontur (kontur.io), CC-BY 4.0 \u2014 GHSL, Meta, Microsoft, Copernicus, OSM",
   "crs": "EPSG:4326",
-  "generatedAt": "2026-06-07T17:38:35Z",
+  "generatedAt": "2026-11-18T20:05:34Z",
   "lods": [
     {
       "lod": "overview",
@@ -12,23 +12,48 @@
       "h3Res": 4,
       "approxKm": 22.0,
       "minZoom": -2.0,
-      "maxZoom": 2.2,
+      "maxZoom": 3.78,
       "cellCount": 71283,
       "maxPopulation": 22732636.0,
       "sumPopulation": 8031924025.0,
       "bytes": 1189500
     },
     {
+      "lod": "r5",
+      "file": "data/r5.parquet",
+      "h3Res": 5,
+      "approxKm": 8.5,
+      "minZoom": 3.78,
+      "maxZoom": 5.18,
+      "cellCount": 393791,
+      "maxPopulation": 8333304.0,
+      "sumPopulation": 8031924024.0,
+      "bytes": 6428136
+    },
+    {
       "lod": "mid",
       "file": "data/mid.parquet",
       "h3Res": 6,
       "approxKm": 3.0,
-      "minZoom": 2.2,
-      "maxZoom": 4.5,
+      "minZoom": 5.18,
+      "maxZoom": 6.59,
       "cellCount": 2016971,
       "maxPopulation": 1949226.0,
       "sumPopulation": 8031924024.0,
       "bytes": 31277924
+    },
+    {
+      "lod": "r7",
+      "tiled": true,
+      "tileParentRes": 2,
+      "indexFile": "data/tiles/r7/index.json",
+      "h3Res": 7,
+      "approxKm": 1.2,
+      "minZoom": 6.59,
+      "maxZoom": 7.99,
+      "cellCount": 9012014,
+      "maxPopulation": 281504.0,
+      "sumPopulation": 8031924024.0
     },
     {
       "lod": "r8",
@@ -37,8 +62,8 @@
       "indexFile": "data/tiles/r8/index.json",
       "h3Res": 8,
       "approxKm": 0.4,
-      "minZoom": 4.5,
-      "maxZoom": 24,
+      "minZoom": 7.99,
+      "maxZoom": 24.0,
       "cellCount": 32957699,
       "maxPopulation": 40673.0,
       "sumPopulation": 8031924024.0

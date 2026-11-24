@@ -12,6 +12,7 @@ import { useGlobeStore } from '../store/useGlobeStore'
 import { useGlobeLayers } from '../layers/useGlobeLayers'
 import { useGlobeData } from '../data/useGlobeData'
 import { useTileStreaming } from '../data/useTileStreaming'
+import { useBasemapTexture } from '../data/useBasemapTexture'
 import { useReducedMotion } from '../lib/useReducedMotion'
 import { formatHash } from '../lib/urlState'
 
@@ -46,9 +47,14 @@ export function Globe() {
   const isDragging = useGlobeStore((s) => s.isDragging)
   const rotateBy = useGlobeStore((s) => s.rotateBy)
   const flyTarget = useGlobeStore((s) => s.flyTarget)
+  const setCanvas = useGlobeStore((s) => s.setCanvas)
+  const landed = useGlobeStore((s) => s.landed)
   const reducedMotion = useReducedMotion()
   const [flying, setFlying] = useState(false)
   const [sharp, setSharp] = useState(false)
+  // The GPU's texture-size limit picks the night-lights file (`lib/basemap.ts` `basemapTextureFor`).
+  const [maxTextureSize, setMaxTextureSize] = useState<number | null>(null)
+  useBasemapTexture(maxTextureSize)
 
   useEffect(() => {
     if (!autoRotate) return
@@ -93,6 +99,7 @@ export function Globe() {
         latitude: moving ? flyTarget.latitude : live.latitude,
         zoom: flyTarget.zoom,
       })
+      landed(flyTarget.id)
       return
     }
 
@@ -117,14 +124,29 @@ export function Globe() {
         zoom: startZoom + dZoom * e,
       })
       if (t < 1) raf = requestAnimationFrame(tick)
-      else setFlying(false)
+      else {
+        setFlying(false)
+        // The loader and tile streams plan for the destination while `flyTarget` is set.
+        landed(flyTarget.id)
+      }
     }
     raf = requestAnimationFrame(tick)
     return () => {
       cancelAnimationFrame(raf)
       setFlying(false)
     }
-  }, [flyTarget, setViewState, reducedMotion])
+  }, [flyTarget, setViewState, reducedMotion, landed])
+
+  // Unmounting mid-flight: the tween will never land, so clear its target — the loader and the
+  // tile streams plan for `flyTarget` while it is set. (Not in the tween effect's cleanup:
+  // that also runs when a newer flight replaces the target, and on StrictMode's re-run.)
+  useEffect(
+    () => () => {
+      const pending = useGlobeStore.getState().flyTarget
+      if (pending) landed(pending.id)
+    },
+    [landed],
+  )
 
   // Render crisp at rest, soft while moving. Drop to the motion cap ~immediately when a
   // drag / spin / flight starts; raise to the still cap only after motion settles. Both
@@ -163,6 +185,9 @@ export function Globe() {
         sharp ? STILL_PIXEL_RATIO : MOTION_PIXEL_RATIO,
       )}
       onViewStateChange={(e) => setViewState(e.viewState as unknown as GlobeViewState)}
+      // The viewport cull keeps what this canvas shows, so its size is part of the cull key.
+      onResize={({ width, height }) => setCanvas(width, height)}
+      onDeviceInitialized={(device) => setMaxTextureSize(device.limits.maxTextureDimension2D)}
       onInteractionStateChange={(s: { isDragging?: boolean }) => {
         const dragging = !!s.isDragging
         setDragging(dragging)

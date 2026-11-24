@@ -7,6 +7,8 @@ interface HudButtonProps {
   shortcut?: string
   /** Toggle state; when defined the button reports `aria-pressed`. */
   pressed?: boolean
+  /** Work under way for this control (`aria-busy`), e.g. a texture loading. */
+  busy?: boolean
   onClick: () => void
   /** Icon (decorative — the name lives on the button). */
   children: ReactNode
@@ -28,6 +30,7 @@ export function HudButton({
   label,
   shortcut,
   pressed,
+  busy,
   onClick,
   children,
   className,
@@ -41,6 +44,7 @@ export function HudButton({
       onClick={onClick}
       aria-label={label}
       aria-pressed={pressed}
+      aria-busy={busy || undefined}
       className={`hud-btn group relative ${className ?? ''}`}
     >
       {children}

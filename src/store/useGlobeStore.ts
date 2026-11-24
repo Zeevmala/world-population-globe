@@ -1,16 +1,25 @@
 import { create } from 'zustand'
-import type { GlobeViewState, HoverInfo, LodData, Manifest } from '../types'
+import type { GlobeViewState, HoverInfo, LodData, Manifest, TileSet } from '../types'
+import type { Canvas } from '../lib/footprint'
+import { MAX_ZOOM, MIN_ZOOM, wrapLng } from '../lib/camera'
+import { wantedIndex } from '../lib/tierBands'
+import { arrivalZoom } from '../lib/tierPlan'
+import { INITIAL_BASEMAP, basemapReducer } from '../lib/basemap'
+import type { BasemapState } from '../lib/basemap'
+import { SETTLE_MS, resizingCanvas } from '../lib/selectionCanvas'
 import { parseHash } from '../lib/urlState'
 import { prefersReducedMotion } from '../lib/useReducedMotion'
 
 // A `#lng/lat/zoom` deep-link (if present) seeds the camera and disables the
-// idle auto-spin so the shared view stays put.
+// idle auto-spin so the shared view stays put. `parseHash` has already validated it:
+// longitude wrapped into [−180, 180), zoom clamped to [MIN_ZOOM, MAX_ZOOM].
 const HASH_VIEW = parseHash()
 
 // Default hero zoom is viewport-aware: on tall-portrait screens the 1.3 framing
 // leaves the globe small with dead space below, so tighten to 1.9. Both values stay
-// < the mid band (2.2) so the coarse `overview` tier remains the on-load tier
-// (no eager 31 MB mid fetch). Load-time only — deep-links and user zoom always win.
+// below the first band past the overview (r5, 3.78 in the manifest) so the coarse
+// `overview` tier remains the on-load tier (no eager r5 / 31 MB mid fetch). Load-time
+// only — deep-links and user zoom always win.
 const defaultZoom = (): number =>
   window.innerHeight > window.innerWidth * 1.4 ? 1.9 : 1.3
 
@@ -18,8 +27,8 @@ const INITIAL_VIEW: GlobeViewState = {
   longitude: HASH_VIEW?.longitude ?? 25,
   latitude: HASH_VIEW?.latitude ?? 20,
   zoom: HASH_VIEW?.zoom ?? defaultZoom(),
-  minZoom: -1,
-  maxZoom: 7,
+  minZoom: MIN_ZOOM,
+  maxZoom: MAX_ZOOM,
 }
 
 type Status = 'idle' | 'loading' | 'ready' | 'error'
@@ -40,9 +49,10 @@ const ZOOM_TWEEN_MS = 420
 
 interface GlobeStore {
   manifest: Manifest | null
+  /** Whole tiers, by tier name, once loaded. */
   data: Record<string, LodData>
-  /** Merged, viewport-scoped r8 tiles (streamed); null until deep zoom. */
-  r8Data: LodData | null
+  /** Tiled tiers, by tier name: what each tier's stream last published (`useTileStreaming`). */
+  tiles: Record<string, TileSet>
   status: Status
   error: string | null
   hover: HoverInfo | null
@@ -51,33 +61,61 @@ interface GlobeStore {
   /** True while the user is actively dragging — disables hover picking so the
    * costly picking-buffer re-render doesn't fire on every pointermove. */
   isDragging: boolean
-  /** Pending fly-to destination (animated by `Globe`); null when idle. */
+  /**
+   * Fly-to destination while the flight is under way (animated by `Globe`, cleared by
+   * {@link GlobeStore.landed} when it ends); null when nothing is flying. The loader and
+   * the tile streams plan for it instead of the frames the tween passes through.
+   */
   flyTarget: FlyTarget | null
   /** Tier currently on screen — feeds LOD hysteresis and the scale readout. */
   activeLod: string | null
+  /**
+   * The globe canvas's size in CSS px — part of the viewport cull's key, since the cull
+   * keeps what this canvas shows. Seeded from the window (the canvas fills it) and kept
+   * current by deck.gl's `onResize`.
+   */
+  canvas: Canvas
+  /**
+   * The canvas tier selection reads (`lib/selectionCanvas.ts`): the real one once it has not
+   * changed for SETTLE_MS; while a window is being resized, a coarse canvas covering it, so a
+   * drag computes new tier thresholds a handful of times instead of on every 16 px.
+   */
+  selectionCanvas: Canvas
+  /** The basemap toggle and its texture's load state (`lib/basemap.ts`). Not in the URL. */
+  basemap: BasemapState
+  /** The decoded night-lights texture, once loaded; kept so turning it back on costs no request. */
+  basemapImage: ImageBitmap | null
 
   setManifest: (m: Manifest) => void
   addData: (d: LodData) => void
-  setR8Data: (d: LodData | null) => void
+  setTiles: (t: TileSet) => void
   setStatus: (s: Status) => void
   setError: (e: string) => void
   setHover: (h: HoverInfo | null) => void
   setViewState: (v: GlobeViewState) => void
   setDragging: (on: boolean) => void
   setActiveLod: (lod: string | null) => void
+  setCanvas: (width: number, height: number) => void
   rotateBy: (deg: number) => void
   zoomBy: (delta: number) => void
   flyTo: (lng: number, lat: number, zoom?: number) => void
+  /** The flight `id` has ended (landed, or jumped under reduced motion): clear `flyTarget` if it is still that one. */
+  landed: (id: number) => void
   toggleAutoRotate: () => void
   setAutoRotate: (on: boolean) => void
+  /** Night lights on / off (the first "on" starts the texture fetch). */
+  toggleBasemap: () => void
+  basemapLoaded: (image: ImageBitmap) => void
+  basemapFailed: (message: string) => void
 }
 
-const wrapLng = (lng: number): number => ((((lng + 180) % 360) + 360) % 360) - 180
+/** Pending switch of `selectionCanvas` back to the real canvas once resizing stops. */
+let settle: ReturnType<typeof setTimeout> | undefined
 
-export const useGlobeStore = create<GlobeStore>((set) => ({
+export const useGlobeStore = create<GlobeStore>((set, get) => ({
   manifest: null,
   data: {},
-  r8Data: null,
+  tiles: {},
   status: 'idle',
   error: null,
   hover: null,
@@ -88,10 +126,14 @@ export const useGlobeStore = create<GlobeStore>((set) => ({
   isDragging: false,
   flyTarget: null,
   activeLod: null,
+  canvas: { width: window.innerWidth, height: window.innerHeight },
+  selectionCanvas: { width: window.innerWidth, height: window.innerHeight },
+  basemap: INITIAL_BASEMAP,
+  basemapImage: null,
 
   setManifest: (manifest) => set({ manifest }),
   addData: (d) => set((s) => ({ data: { ...s.data, [d.lod]: d } })),
-  setR8Data: (r8Data) => set({ r8Data }),
+  setTiles: (t) => set((s) => (s.tiles[t.lod] === t ? s : { tiles: { ...s.tiles, [t.lod]: t } })),
   setStatus: (status) => set({ status }),
   setError: (error) => set({ error, status: 'error' }),
   setHover: (hover) => set({ hover }),
@@ -102,6 +144,19 @@ export const useGlobeStore = create<GlobeStore>((set) => ({
   // Same idempotent-edge guard: written from a render effect, so it must not
   // re-enter when the tier is unchanged.
   setActiveLod: (lod) => set((s) => (s.activeLod === lod ? s : { activeLod: lod })),
+  // Same guard: deck.gl reports a size on every resize check, the cull re-runs only on a change.
+  // Selection moves to a coarse covering canvas at once and to the real one when resizing stops.
+  setCanvas: (width, height) => {
+    const s = get()
+    if (s.canvas.width === width && s.canvas.height === height) return
+    const canvas = { width, height }
+    set({ canvas, selectionCanvas: resizingCanvas(s.selectionCanvas, canvas) })
+    clearTimeout(settle)
+    settle = setTimeout(() => {
+      const { canvas: real, selectionCanvas: sel } = get()
+      if (sel.width !== real.width || sel.height !== real.height) set({ selectionCanvas: real })
+    }, SETTLE_MS)
+  },
   rotateBy: (deg) =>
     set((s) => ({
       viewState: { ...s.viewState, longitude: wrapLng(s.viewState.longitude + deg) },
@@ -113,7 +168,7 @@ export const useGlobeStore = create<GlobeStore>((set) => ({
   // the same tick. Repeat clicks accumulate, because each reads the live (mid-tween) zoom.
   zoomBy: (delta) =>
     set((s) => {
-      const { zoom, minZoom = -2, maxZoom = 8 } = s.viewState
+      const { zoom, minZoom = MIN_ZOOM, maxZoom = MAX_ZOOM } = s.viewState
       const next = Math.min(maxZoom, Math.max(minZoom, zoom + delta))
       if (next === zoom) return s
       return {
@@ -127,23 +182,38 @@ export const useGlobeStore = create<GlobeStore>((set) => ({
       }
     }),
   // Request an animated flight (run by `Globe`); stops auto-rotation. Defaults to a
-  // city-scale zoom (5 → r8 streams in) unless the current view is already deeper.
+  // city-scale zoom inside the finest tier's band at the destination, on this canvas
+  // (`arrivalZoom`), unless the current view is already deeper.
   flyTo: (lng, lat, zoom) =>
     set((s) => ({
       autoRotate: false,
       flyTarget: {
         longitude: lng,
         latitude: lat,
-        zoom: zoom ?? Math.max(s.viewState.zoom, 5),
+        zoom: zoom ?? Math.min(MAX_ZOOM, Math.max(s.viewState.zoom, arrivalZoom(s.manifest, lat, s.selectionCanvas))),
         id: Date.now(),
       },
     })),
+  landed: (id) => set((s) => (s.flyTarget?.id === id ? { flyTarget: null } : s)),
   toggleAutoRotate: () => set((s) => ({ autoRotate: !s.autoRotate })),
   setAutoRotate: (autoRotate) => set({ autoRotate }),
+  toggleBasemap: () => set((s) => ({ basemap: basemapReducer(s.basemap, { type: 'toggle' }) })),
+  basemapLoaded: (image) =>
+    set((s) => {
+      const basemap = basemapReducer(s.basemap, { type: 'loaded' })
+      return basemap === s.basemap ? s : { basemap, basemapImage: image }
+    }),
+  basemapFailed: (message) =>
+    set((s) => {
+      const basemap = basemapReducer(s.basemap, { type: 'failed', message })
+      return basemap === s.basemap ? s : { basemap }
+    }),
 }))
 
 // Dev-only debug handle (stripped from production builds): lets tooling inspect
 // state and drive the camera, e.g. `__globe.getState().setViewState(...)`.
 if (import.meta.env.DEV) {
   ;(globalThis as unknown as { __globe?: typeof useGlobeStore }).__globe = useGlobeStore
+  // The app's tier selection, for QA tooling that must agree with it (`scripts/qa/page-probe.mjs`).
+  ;(globalThis as unknown as { __globeTiers?: { wantedIndex: typeof wantedIndex } }).__globeTiers = { wantedIndex }
 }

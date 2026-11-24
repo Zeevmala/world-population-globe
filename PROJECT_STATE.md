@@ -306,6 +306,174 @@ every guard while quietly regressing bandwidth. Default corrected to 3.
 Corrected in `CLAUDE.md`: r6 sums to **8,031,924,024**, not …025. Only r4 differs, and
 that is float32 rounding in the pipeline's `CAST(... AS FLOAT)` — not a data difference.
 
+## Status: Sprint 8 — the factory gets an oracle, a gate and a checker ✅ ON BRANCH (not merged, not deployed)
+
+User brief (2026-11-17): review and upgrade the project for better results, implement the
+factory, execute it on Opus 5.5.
+
+### What the review found
+- **The factory was not running.** The "factory tick" Routine this file described was not
+  among the account's scheduled tasks, and nothing had landed since 2026-09-02 — the six
+  queued items sat untouched for eleven weeks.
+- **The verifier could not see behaviour.** `npm run verify` was eslint + tsc + vite
+  build, with not one unit test: a wrong cull, a broken top-k or a stepped height profile
+  all type-check and build.
+- **The contract and the prompt disagreed** (the contract required qa:render / verify:data
+  by path; the prompt the runner pipes in only ever ran `npm run verify`), and **the maker
+  certified itself**.
+- Three defects in shipped code, all since fixed by the factory (below).
+
+### What changed
+| # | Change | State |
+|---|---|---|
+| 1 | Unit tests (vitest, Node, < 2 s) as the behavioural oracle; `verify` = eslint → tests → tsc → build. 60 tests at introduction, each of six injected bugs killed | ✅ |
+| 2 | `npm run gate` — path-scoped verifier selection in code; `npm run queue` — the one parser of `specs/TODO.md` | ✅ |
+| 3 | Maker / checker agents + `/factory` orchestration; the runner pins a model, refuses `main`, re-runs the gate itself | ✅ |
+| 4 | CI and the deploy workflow run `verify` + `verify:data` before anything publishes | ✅ |
+| 5 | Tick 1 — one failed r8 tile no longer blanks the r8 view (`869bd9bc`) | ✅ |
+| 6 | Tick 2 — a dead decode worker falls back inline instead of hanging the loader (`dcfb18ab`) | ✅ |
+| 7 | Tick 3 — deep-links: strict parsing, wrapped longitude, clamped zoom (`35f74ebc`) | ✅ |
+| 8 | Tick 4 — spherical-cap cull sized from its memo key (`6e54a1d9`) | ✅ |
+| 9 | Tick 5 — tile stream: stale partial bursts expire; eviction protects the current view (`ed5959a0`) | ✅ |
+| 10 | Tick 6 — H3 boundary cache; the column layer rendered without the `H3HexagonLayer` wrapper (`1eff4574`) | ✅ |
+| 11 | Tick 7 — a zoom frame no longer re-tessellates the columns (`1136b8d1`) | ✅ |
+
+### What the loop is worth, measured on seven ticks
+Every tick passed the gate on its first cut. The checker — fresh context, never shown the
+maker's report — still sent four of seven back, each for a real defect a green gate could
+not see: a tile abandoned for the whole session after a ten-second outage (tick 1); a dead
+worker reported only as a warning, which would have hidden a broken worker from the render
+gate (tick 2); a cull window sized from the triggering view rather than its memo key,
+leaving a gap under zoom drift that the old code did not have (tick 4); and a depth bias
+that shifted when a wrapper layer was removed, found by a pixel diff of the gate's
+screenshots — 31–45 pixels of 504,000 — and traced by the checker to deck.gl's layer-index
+resolver (tick 6). Two follow-up items came out of the ticks themselves (the tile-stream
+loose ends from tick 1's checkers; the per-zoom-frame rebuild from tick 6's maker) and
+both shipped. Tests went 60 → 150.
+
+Measured gains, Node timings on the committed mid tier unless noted:
+- Boundary work on a repeat cull: 534 → 45 ms (India z2.5), 463 → 26 ms (Tokyo z3.5);
+  whole tessellation 707 → 145 ms and 621 → 106 ms (`scripts/bench/boundary_bench.mjs`).
+- A zoom frame inside one cull key: a full re-tessellation of every culled cell → none
+  (in the real page: 0 `updateGeometry` calls over ten zoom frames,
+  `scripts/qa/zoom_rebuild.mjs`).
+- The cull itself: unchanged cost (15 ms) for a window that is now correct at the poles
+  and across the antimeridian (`scripts/bench/cull_bench.mjs`).
+
+### The finding that outranks the queue: the LOD bands are ~3 zoom levels early
+Tick 4's checker tested the cull against deck.gl's real `GlobeViewport` rather than the
+`180/2^zoom` half-span the code assumes, and the model did not survive. Followed up with a
+direct measurement (1280×800, CSS px): an r6 hexagon is **0.38–0.47 px** across when the
+mid tier switches on at zoom 2.2; an r8 hexagon is **0.27–0.33 px** across when r8 switches
+on at 4.5 and still only **1.5–1.9 px** at the maximum zoom of 7. Drawing sub-pixel prisms
+puts far more cells on screen than the 120 k cap allows, which is the common root of the
+top-k truncation, the cull-boundary popping, the per-re-cull boundary cost and the seam at
+each crossing — and of two visible defects: at zoom 4.6 over Tokyo the r8 tier draws a
+patch around the center and leaves the rest of Japan blank (`scripts/qa/out/tokyo-z4.60.png`),
+and the mid tier draws a truncated disc covering about half the visible radius on a desktop.
+The full numbers, and the two ways forward — **A:** band by on-screen cell size (add r5 and
+r7 by H3-parent aggregation of the committed tiers, raise `maxZoom` to ~10), **B:** keep the
+bands and patch the symptoms — are the first Backlog entry in `specs/TODO.md`. **It needs a
+decision**; the items that depend on it are held there, and the queue carries only work
+that is valid either way.
+
+### Verification log (Sprint 8)
+- Gate green on every commit, run by the orchestrator: queue lint, eslint, unit tests,
+  `tsc -b`, `vite build`, `qa:render --quick` (PASS, 0 console errors, 120 k cap held).
+- Headless confirmations re-run by the orchestrator: `tile_fail.mjs` (tile aborted →
+  `activeLod=r8`, 52,306 cells, 0 unhandled rejections) and `--fail-worker` (worker script
+  aborted → `status=ready`, 71,283 cells in 17 s).
+- Not verified anywhere: behaviour on a real GPU. Every browser number here is SwiftShader;
+  the Node timings (`scripts/bench/cull_bench.mjs`) are the ones that transfer.
+- No schedule was registered: a recurring task spends tokens unattended, and whether the
+  missing Routine was removed on purpose is not something the repo can answer.
+- Left in the queue, each waiting on something outside the session: the night-lights
+  basemap (its texture could not be downloaded from the cloud session — see the item) and the
+  render gate in CI (its Accept needs a GitHub Actions run, which needs a pull request —
+  the same PR would be the first Actions run of the `verify` + `verify:data` steps this
+  sprint added to CI and to the deploy workflow, which are unverified there until then).
+
+## Status: Sprint 9 — Option A: tiers banded by on-screen cell size ✅ ON BRANCH (not merged, not deployed)
+
+Owner decision 2026-11-18: of the two ways forward recorded at the end of Sprint 8, **A** —
+band the LOD tiers by on-screen cell size, add r5 and r7 by aggregating the committed data,
+raise the maximum zoom to 10. Carried out as five factory ticks, in dependency order.
+
+| # | Tick | Change | Commit |
+|---|---|---|---|
+| 1 | 8 | r5 tier (H3-parent roll-up of r6); bands from "a hexagon is 3 px across"; `MAX_ZOOM` 7 → 10 | `1e75ffc1` |
+| 2 | 9 | Cull window from GlobeView's real footprint (`lib/footprint.ts`), canvas size in the cull key | `55c113c3` |
+| 3 | 10 | Tile streaming for any tiled tier; tiles chosen from the cull's own window | `1856cbe5` |
+| 4 | 11 | r7 tier (roll-up of r8), tiled by r2 parents; `verify:data` generic over tiled tiers | `9f3db146` |
+| 5 | 12 | Per-view tier selection: each tier starts where its cull window fits the cap | `404ac720` |
+| + | 13 | Follow-up: the cap bound knows where H3's cells are small; selection reads a debounced canvas | `e2394f59` |
+| + | 14 | Opt-in NASA Black Marble night-lights basemap (owner permitted the GIBS download 2026-11-23) | `feat(basemap): opt-in NASA Black Marble…` |
+
+### Before and after
+- **Tiers:** r4 / r6 / r8 switching at zoom 2.2 and 4.5 → r4 / r5 / r6 / r7 / r8, each starting
+  where its cells are legible and its window fits the 120 k cap for the view's latitude and
+  canvas. A 400 m cell is ~12 px at zoom 10; it was under 2 px at the old maximum of 7.
+- **What was on screen:** at zoom 4.6 over Tokyo the 400 m tier drew a patch and left the
+  rest of Japan blank; the mid tier drew a disc covering about half the visible radius. Now a
+  culled tier fills the canvas — seen at 1280×800 over India on r5 and r6, and at 1920×1080
+  over Delhi on r8 — and the bench's scan of 136,320 views finds no window over the cap and
+  no on-screen cell missing.
+- **Data:** five tiers, each summing to 8.03 B (r5 393,791 cells, 6.4 MB; r7 9,012,014 cells
+  in 2,409 tiles, 141 MB). `public/` is 684 MB — 68.6 % of GitHub Pages' 1 GB limit.
+  `verify:data` proves both roll-ups cell by cell (~55 s, was ~22 s).
+- **Render gate:** ~400 s → ~190 s on the software rasterizer after tick 8 (far fewer
+  sub-pixel prisms), ~390–450 s now that it visits five tiers; worst stall ~40 s → ~18–23 s.
+- **Basemap (tick 14):** a night-lights toggle (N) swaps the ocean sphere and land fill for
+  NASA Black Marble (VIIRS 2016, via GIBS; 429 kB at 4096 px, 121 kB at 2048 px, fetched only
+  when turned on). The lights sit exactly where the densest columns are and share the top of
+  the Inferno ramp's colour, so the texture is tone-mapped before it is committed: no pixel is
+  brighter than the ramp's midpoint (0.126 against 0.140 relative luminance; the source peaks
+  at 1.0), while land and sea tones are left within a level. Georeferenced by a `BitmapLayer`'s
+  bounds on a 1° mesh; the checker confirmed it against Natural Earth coasts and by
+  unprojecting rendered frames. The default (dark) render is pixel-identical to before.
+- **Tests:** 150 → 353.
+
+### What the loop caught in this sprint
+Five ticks, four review or gate send-backs, each for something a green gate could not see:
+- **Tick 8:** the checker withheld its pass until three headless checks had been run at the
+  new zooms (they passed) — no code finding.
+- **Tick 10:** the gate went red on a harness step that waited a fixed 30 s for the first-run
+  cue (the rasterizer was slower); then the checker failed the change with counterexamples —
+  tile selection sampled each cell's boundary at a few points and could skip an on-screen
+  tile on a small ground footprint (149 misses in 20,000 high-latitude views). The loop
+  contract's "one retry per tick" would have blocked the item there; it was changed to one
+  send-back per oracle (`c442c5a5`).
+- **Tick 12:** the first cut met its criteria as written, and the checker's wider scan found
+  the r5 window over the cap in 2,518 of 102,240 cases across Central Asia, Russia and Iran,
+  with the triggering view itself losing edge cells — partly the specification's own fault
+  (it had asked for key-only selection past the cap without first guaranteeing the window
+  fits). The specification was amended to require the fit by construction, and a second
+  checker verified the bound against real H3 cell counts.
+Two specification errors were mine and were corrected in the queue: an acceptance criterion
+that contradicted the bench's numbers, and the retry rule above.
+
+### What it cost, and what is open
+- **Coarser on desktop than the 3-px rule.** The cap guarantee is conservative. After tick 12,
+  on 1920×1080 each tier started about 1.5 zoom later than the 3-px rule (r5 at 5.44, cells
+  9.5 px across; r4 cells reach ~23 px first), about 1 zoom later on 1280×800. Tick 13 took
+  back what a bound without a longitude key can: H3's hexagons are 1.2066 · cos³θ × the mean
+  (θ to the nearest icosahedron face centre), so a window is weighed by where the small cells
+  can actually be instead of by the smallest cell anywhere. r5 now starts 0.22–0.25 zoom
+  earlier on desktop (1920×1080: 5.20, cells 8.0 px), mid 0.11–0.13, r7 and r8 under 0.1 —
+  their windows are small enough to sit next to a vertex. The guarantee is unchanged: the
+  checker's adversarial search over 14 canvases peaks at 93.8 % of the cap in real H3 cells,
+  and the 136,320-view scan still finds no window over it and no cell missing. What is left
+  is recorded in the Backlog: longitude-aware thresholds (0.13–0.35 zoom at typical cities
+  for r7/r8, at the price of a second cache dimension), and the 120 k cap itself, an owner
+  decision that needs frame times on a real GPU.
+- **Not verified:** anything on a real GPU; the original pipeline scripts end to end (the
+  Kontur source is unreachable from the cloud session — the new tiers are built from the
+  committed data); `verify_live.mjs` against a deployment.
+- **Still waiting on the owner:** a pull request (the CI render-gate item, and the first
+  GitHub Actions run of the test and data-gate steps added in Sprint 8); the 120 k cap
+  decision; and a look at night lights on a real screen — at r8 zoom the magnified texture is
+  a grey blur over water (Backlog).
+
 ## Iteration loop
 
 Human / sprint cadence (this file is the PM log):
@@ -315,18 +483,22 @@ Human / sprint cadence (this file is the PM log):
 4. **Verify (all layers below)** → 5. Update this file + commit → 6. Deploy via CI → 7. **Post-deploy gate**.
 
 Autonomous cadence (loop-engineering scaffolding, added 2026-06-11; continuous since 2026-08-30):
-- **Scheduled trigger:** Routine "world-population-globe — factory tick", cron `10 */6 * * *`
-  (every 6 h, fresh session). Each fire: health-check the live site, take the FIRST unchecked
-  item in `specs/TODO.md`, implement it, run the verifier chain, commit, push `loop/auto`,
-  open/update a PR. **It never pushes to `main`** — `main` auto-deploys to the public site, so
-  every autonomous change stays behind a human merge. If a fired session has no GitHub tooling
-  it still pushes the branch and prints the compare link.
+- **Trigger:** manual today — `/factory [ticks]` in a session, or `Invoke-RalphLoop.ps1`
+  in a worktree. An earlier revision of this file said a Routine fired every 6 h (and
+  `specs/TODO.md` said every 3 h); on 2026-11-17 no such scheduled task existed on the
+  account and nothing had landed since 2026-09-02 — see Sprint 8. A schedule, when one is
+  registered, should fire `/factory 1` on a branch and **never push to `main`**: `main`
+  auto-deploys to the public site, so every autonomous change stays behind a human merge.
+- **Maker / gate / checker:** `/factory` ([`.claude/commands/factory.md`](.claude/commands/factory.md))
+  spawns `factory-implementer`, runs `npm run gate` itself, then spawns `factory-reviewer`
+  with fresh context; it commits only on a green gate **and** a PASS.
 - **Queue + loop contract:** [`specs/TODO.md`](specs/TODO.md) — the loop's spine; one item = one tick = one commit.
 - **Anchors read every tick:** [`CLAUDE.md`](CLAUDE.md) operating rules + invariants; [`VISION.md`](VISION.md) north star.
 - **Per-tick prompt:** [`PROMPT.md`](PROMPT.md); **runner:** [`Invoke-RalphLoop.ps1`](Invoke-RalphLoop.ps1)
   (max-iter cap, no-progress ×3 halt, line-anchored `BLOCKED:` sentinel, per-iteration logs; worktree-only).
 - **`/loop` maintenance default:** [`.claude/loop.md`](.claude/loop.md) (uncommitted work → CI/deploy health → `verify:live` → queue).
-- **Verifier:** `npm run verify` (eslint + tsc + vite build, one exit code) locally; CI + `verify-live` post-deploy.
+- **Verifier:** `npm run verify` (eslint + unit tests + tsc + vite build, one exit code); `npm run gate`
+  adds the path-scoped render and data gates; CI + `verify-live` post-deploy.
 
 ## QA & verification loop
 
@@ -336,6 +508,7 @@ Defense in depth — each layer catches what the previous cannot:
 |---|---|---|
 | Data integrity | pipeline asserts (Σ pop ≈ 8.03 B, per-file < 100 MB, city spot-checks) | bad/incomplete data, CRS errors |
 | Static analysis | `tsc -b` + `eslint .` (CI) | type/lint regressions |
+| Unit tests | `npm test` — vitest over the pure render logic (CI) | wrong cull / LOD / encoding math that still type-checks |
 | Build | `vite build` (CI) | bundler/import resolution (e.g. subpath imports) |
 | Local visual QA | Claude Preview: load, zoom-to-city, screenshot, console/network | render bugs, runtime errors, wrong fetches |
 | **Post-deploy E2E** | `npm run verify:live` — fetches + parses the **deployed** manifest/tiers/tile the way the browser does (whole-file + gzip); wired as the `verify-live` CI job after Pages deploy | **deploy-only** failures (CDN gzip+range, propagation, 404s) |
