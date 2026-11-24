@@ -25,6 +25,7 @@ React 19 + TypeScript (strict) + Vite + Tailwind v4 · deck.gl 9 · Zustand · h
 | `npm test` | Unit tests (vitest, plain Node, ~20 s) over the pure render logic — LOD + cull, tier selection + the cap bound, density, scales, tiles, H3 column, deep-links |
 | `npm run gate` | **The factory gate** — path-scoped: queue lint + `verify` always; `qa:render --quick` if the browser loads what changed; `verify:data` if pipeline/data changed; every changed file < 100 MB |
 | `npm run queue -- <status\|next\|lint>` | The one parser of `specs/TODO.md` (first unchecked item, blocked state, format) |
+| `npm run check:freshness` | Is the shipped Kontur release still the newest? HEADs the source bucket for every later date, with the shipped release as a positive control (~25 s, needs the network, not part of the gate); exit 0 current · 1 newer · 2 inconclusive |
 | `npm run verify:live [url]` | Post-deploy E2E — fetch + parse the deployed manifest/tiers/tile, Σ-pop check |
 | `npm run verify:data` | Local data gate — every whole tier + all 2,409 r7 and 12,761 r8 tiles: Σ-pop, counts, CRS bounds, H3 parent roll-ups (tile ↔ parent, r5 ↔ r6, r7 ↔ r8), band contiguity, file sizes |
 | `npm run qa:render` | Headless render QA — zoom sweep, frame timing, stall + console-error gate |

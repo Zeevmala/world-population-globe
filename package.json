@@ -18,6 +18,7 @@
     "qa:basemap": "node scripts/qa/basemap_qa.mjs",
     "gate": "node scripts/factory/gate.mjs",
     "queue": "node scripts/factory/queue.mjs",
+    "check:freshness": "node scripts/check_freshness.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
