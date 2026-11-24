@@ -306,7 +306,7 @@ every guard while quietly regressing bandwidth. Default corrected to 3.
 Corrected in `CLAUDE.md`: r6 sums to **8,031,924,024**, not …025. Only r4 differs, and
 that is float32 rounding in the pipeline's `CAST(... AS FLOAT)` — not a data difference.
 
-## Status: Sprint 8 — the factory gets an oracle, a gate and a checker ✅ ON BRANCH (not merged, not deployed)
+## Status: Sprint 8 — the factory gets an oracle, a gate and a checker ✅ SHIPPED (merged + deployed 2026-11-24)
 
 User brief (2026-11-17): review and upgrade the project for better results, implement the
 factory, execute it on Opus 5.5.
@@ -393,7 +393,7 @@ that is valid either way.
   the same PR would be the first Actions run of the `verify` + `verify:data` steps this
   sprint added to CI and to the deploy workflow, which are unverified there until then).
 
-## Status: Sprint 9 — Option A: tiers banded by on-screen cell size ✅ ON BRANCH (not merged, not deployed)
+## Status: Sprint 9 — Option A: tiers banded by on-screen cell size ✅ SHIPPED (merged + deployed 2026-11-24)
 
 Owner decision 2026-11-18: of the two ways forward recorded at the end of Sprint 8, **A** —
 band the LOD tiers by on-screen cell size, add r5 and r7 by aggregating the committed data,
@@ -473,6 +473,106 @@ that contradicted the bench's numbers, and the retry rule above.
   GitHub Actions run of the test and data-gate steps added in Sprint 8); the 120 k cap
   decision; and a look at night lights on a real screen — at r8 zoom the magnified texture is
   a grey blur over water (Backlog).
+
+## Status: Sprint 10 — the factory keeps what it learns (phase 1) ✅ ON BRANCH (not merged)
+
+Sprints 8 and 9 (PR #2) were merged on 2026-11-24 (`e6aa859b`). This sprint changes no
+application code.
+
+### Why
+The loop learns something on most ticks and files it by date — a Done note, a commit
+body, a sprint entry here. Reading the notes of ticks 1–14 for what each of the eight
+send-backs was *for* (one reader's classification of the notes, not a measurement):
+
+| | Count | Which |
+|---|---|---|
+| Over something already known or recorded | 3 of 8 | tick 2 (a failure logged as a warning, which the render gate does not fail on), tick 10's gate send-back (a fixed wait the software rasterizer outlasted), tick 12 (criteria that could not hold as written — "partly the specification's own fault", Sprint 9) |
+| A first discovery — a note only prevents the repeat | 3 of 8 | tick 4 (cull radius from the triggering view, not the key), tick 6 (deck.gl sublayer index and depth bias), tick 10's review send-back (boundary sampling is not an overlap test) |
+| Not a knowledge problem | 2 of 8 | tick 1 (a design judgment), tick 8 (the checker could not see the headless runs) |
+
+Specification errors were the other cost: tick 4's premise ("only half right"), a
+criterion that contradicted the bench's numbers (`61a892f8`), and tick 12's criteria. So a
+note store might have helped with about three send-backs in eight and with the
+specification step; the checker caught the rest and nothing replaces it. That sized the
+work: small, in two phases, the second only if the first shows a need.
+
+### What was added
+- **A flag channel.** The maker's report and the checker's verdict end with a
+  `KNOWLEDGE:` block — what they were told that was wrong, or had to work out because
+  nothing recorded it, with evidence and an optional correction. The orchestrator appends
+  it to `knowledge/INBOX.md` in the tick's commit, on the blocked path too. Agents doing an
+  item flag; they never edit the notes.
+- **The owner's rulings** go into the same inbox in their words when they are given.
+- **Whoever writes a queue item reads the notes first** and says where its premise was
+  measured (`.claude/commands/factory.md`, "Writing a queue item").
+- **`knowledge/`**: an index, an entry format (claim · measured / sourced / decided ·
+  evidence · check · date), and one note, `verification-limits.md` — what each check can
+  and cannot see: 9 entries and a table of what only a real machine can settle.
+- **`npm run check:freshness`** (`scripts/check_freshness.mjs`, 15 unit tests): the
+  `docs/data.md` §8 audit as a command.
+
+### What two reviews of the first note found
+The note went through `factory-reviewer` before it was committed, twice, each time a fresh
+context given the item text only. Both returned FAIL. That is the result of this sprint
+worth keeping.
+
+- **Review 1.** The draft held eleven entries written in good faith and one planted,
+  undisclosed, believed false: "the render gate fails on any failed network request". The
+  checker rejected it, citing `render_qa.mjs`'s `requestfailed` handler (it pushes a
+  warning). It also failed three good-faith entries whose evidence did not say what the
+  entry said, and one cited a record that did not exist in the repository.
+- **Review 2**, of the corrected note. It ran a probe instead of reading the handler:
+  Chromium reports a failed *main-thread* request as a console error, which the gate does
+  fail on; a failed request from a Worker it does not. So the planted entry was half true,
+  the first checker's correction was half wrong, and the orchestrator had adopted it. It
+  also found a citation that contradicts the entry citing it, an enumeration with an
+  omission, four inbox entries with misplaced or contradicted evidence, and errors of
+  detail in this section's first draft.
+
+What was done with that: the three entries review 2 failed, and the schedule entry it
+could not ground, were **withdrawn to the inbox** rather than rewritten a third time. The
+note as committed holds the eight entries review 2 marked met, plus one (the GPU entry)
+with the contradicting citation removed; two had a label or a heading narrowed afterwards.
+**No third review was run** — the loop contract allows one send-back per oracle, and the
+honest state after two FAILs is a smaller note, not a third attempt at the same claims.
+The inbox entries were corrected from review 2's findings and have not been re-reviewed.
+
+The lesson is already an inbox entry: a claim about what a check *does* needs a check of
+its own (a probe that fails when the claim stops being true), not a reading of the code —
+two careful readers read the same handler and both got the behaviour wrong.
+
+### The September schedule
+Sprint 8 found that the scheduled factory run had produced nothing and no longer existed.
+This session's recollection of it — a recollection, since nothing was recorded at the
+time: the schedule was pointed at `main` while the six-item queue and the `verify:data`
+and `qa:render` scripts it depended on were still on the branch of PR #1; it fired on
+2026-09-02, the runs that finished were recorded as succeeded, and none left a branch or a
+pull request; it was paused that day, shortly before PR #1 merged. Why no push landed was
+not determined. It is an inbox entry, not a note entry, until a schedule is next
+registered and a hand-fired run is recorded properly.
+
+### Verification log (Sprint 10)
+- PR #2's merge: the deploy, CI and `verify-live` runs for `e6aa859b` passed (read from the
+  Actions API on 2026-11-24, not checkable from the repository).
+- `npm run gate -- --base origin/main` green before the note was cut down: file size ·
+  queue lint · verify (368 tests, build) · `qa:render --quick` PASS in 403 s. The changes
+  after that run are Markdown only; queue lint re-run clean.
+- `npm run check:freshness`, 2026-11-24: **Kontur `2023-11-01` is still the newest
+  release** — control 200, 1,119 later dates all absent (`docs/data.md` §8). Five
+  deliberate bugs in the script are each killed by its tests; against the real bucket a
+  control date that does not exist exits 2.
+- **Not verified:** the flag path inside `/factory`. No tick has run since it was added;
+  the only real use so far is the two reviews above, which did fill the block. Whether any
+  of this lowers the send-back rate is unknown until some ticks have run.
+
+### Open
+- **Phase 2, only if the inbox earns it:** a curator agent and `/curate`, a lint for the
+  notes in the gate, a geometry note (two inbox entries are waiting for one), procedures as
+  skills. Fifteen entries are in the inbox today, most of them from this sprint's reviews.
+- Inbox entries that need the owner or a code change: handing the checker the
+  orchestrator's run output (a contract change); the wording of `qa:render` in `CLAUDE.md`;
+  a stale line in `render_qa.mjs`'s report; one sentence in `docs/data.md` §4.
+- Still no schedule: the factory runs when `/factory` is run.
 
 ## Iteration loop
 

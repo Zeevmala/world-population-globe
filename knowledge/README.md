@@ -6,10 +6,11 @@ one for a lesson: the agent writing or implementing the next queue item cannot b
 to read fourteen ticks of history to find the one sentence that applies to it. This
 directory holds those sentences by topic, each with the evidence behind it.
 
-It exists because of a count, not a hunch. Of the eight first attempts the gate or the
-checker sent back in ticks 1–14, three failed on something already known or recorded
-somewhere (ticks 2, 10 and 12), and all three specification errors came from a queue item
-written without a fact that existed. The checker caught the rest, and nothing here
+It exists because of a count, not a hunch. Of the eight send-backs the gate or the checker
+issued in ticks 1–14, three were over something already known or recorded somewhere (ticks
+2, 10 and 12), and the specification errors came from queue items written without a fact
+that existed (`PROJECT_STATE.md`, Sprint 10 — one reader's classification, not a
+measurement). The checker caught the rest, and nothing here
 replaces it.
 
 ## Index — read these before touching those paths
@@ -36,7 +37,10 @@ explain *why* an invariant exists; it never restates one.
 - **Curation is separate, and goes through the same two oracles as code.** Someone other
   than the flagging agent turns inbox entries into note entries, `npm run gate` runs, and
   a fresh `factory-reviewer` re-checks each new claim against its evidence before the
-  commit. Today that someone is a session doing it by hand at the end of a run. A
+  commit. An entry that fails review twice is withdrawn to the inbox, not rewritten a
+  third time. A claim about what a check *does* needs a probe as its `check:` — in the
+  first curation pass two reviewers read the same handler and both got its behaviour
+  wrong (`PROJECT_STATE.md`, Sprint 10). Today that someone is a session doing it by hand at the end of a run. A
   curator agent is worth building only if the inbox shows it would have work.
 - **A curation pass may not touch** the invariants in `CLAUDE.md`, `scripts/factory/**`,
   `.claude/agents/**`, `.claude/commands/**`, the loop contract in `specs/TODO.md`, or any
