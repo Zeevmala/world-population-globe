@@ -568,7 +568,8 @@ registered and a hand-fired run is recorded properly.
 ### Open
 - **Phase 2, only if the inbox earns it:** a curator agent and `/curate`, a lint for the
   notes in the gate, a geometry note (two inbox entries are waiting for one), procedures as
-  skills. Fifteen entries are in the inbox today, most of them from this sprint's reviews.
+  skills. Fifteen entries are in the inbox today: four seeded from ticks 1–14, six from this
+  sprint's two reviews, five owner rulings.
 - Inbox entries that need the owner or a code change: handing the checker the
   orchestrator's run output (a contract change); the wording of `qa:render` in `CLAUDE.md`;
   a stale line in `render_qa.mjs`'s report; one sentence in `docs/data.md` §4.
