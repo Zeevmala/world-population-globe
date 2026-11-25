@@ -561,15 +561,42 @@ registered and a hand-fired run is recorded properly.
   release** — control 200, 1,119 later dates all absent (`docs/data.md` §8). Five
   deliberate bugs in the script are each killed by its tests; against the real bucket a
   control date that does not exist exits 2.
-- **Not verified:** the flag path inside `/factory`. No tick has run since it was added;
+- **Not verified at the time** (since exercised — see "Tick 15" below)**:** the flag path inside `/factory`. No tick had run since it was added;
   the only real use so far is the two reviews above, which did fill the block. Whether any
   of this lowers the send-back rate is unknown until some ticks have run.
+
+### Tick 15 — the first tick with the flag channel (2026-11-25)
+The last queued item, "Wire the render gate into CI", ran through `/factory` on this
+branch with pull request #3 open.
+
+- **Shipped:** a `render` job in CI (`qa:render --quick`, report and screenshots uploaded,
+  failures as annotations); the QA dev server bound to the literal address the harness
+  drives; `verify:live` asserting the deployed tier set against the committed manifest.
+- **The loop:** gate green first time; the first checker failed the change on something no
+  local run could show (Vite listening on `localhost` while the harness probed 127.0.0.1);
+  the maker reproduced it and fixed the harness; a fresh checker passed it.
+- **Proved on real Actions runs:** green on the clean head (`render` 5 min 12 s), red on a
+  deliberate one-line break while `build` stayed green — the gap the job closes — and green
+  again after the revert (4 min 17 s). The break and its revert are two labelled commits
+  in the branch history (`03b2788d`, `b0a775e0`).
+- **The flag channel worked.** Maker and both checkers filled their `KNOWLEDGE:` blocks
+  unprompted beyond the format; seven distinct entries went into the inbox, three of them
+  raised independently by two or three agents (the browser lookup path that never matches,
+  the dev-server bind address, a note entry this very change made stale). One flag was
+  about the notes themselves going stale — the store was read and used inside the tick.
+  The inbox now holds 22 entries, which is the case for a curation pass (phase 2).
+- **An orchestrator error, caught before it left the machine:** the first attempt to revert
+  the break failed silently and the next command relabelled the break commit as its own
+  revert. The push was rejected, the trees were compared, and the revert was redone; only
+  correctly labelled commits were pushed.
+- **Not verified:** the `verify:live` assertion against a real deployment; whether the
+  runner would have failed without the bind fix.
 
 ### Open
 - **Phase 2, only if the inbox earns it:** a curator agent and `/curate`, a lint for the
   notes in the gate, a geometry note (two inbox entries are waiting for one), procedures as
-  skills. Fifteen entries are in the inbox today: four seeded from ticks 1–14, six from this
-  sprint's two reviews, five owner rulings.
+  skills. After tick 15 the inbox holds 22 entries: four seeded from ticks 1–14, six from
+  this sprint's two reviews, seven from tick 15, five owner rulings.
 - Inbox entries that need the owner or a code change: handing the checker the
   orchestrator's run output (a contract change); the wording of `qa:render` in `CLAUDE.md`;
   a stale line in `render_qa.mjs`'s report; one sentence in `docs/data.md` §4.

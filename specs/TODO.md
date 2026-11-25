@@ -43,24 +43,8 @@ REPORT  : evidence in the Done note + commit body; sprint summary → PROJECT_ST
 
 ## Queue
 
-Option A (decided 2026-11-18, see **Backlog**) is done — its five items, the follow-up
-that tightened the cap rule (tick 13) and the night-lights basemap (tick 14) are under
-**Done**. The one item left here waits on a pull request.
-
-- [ ] Wire the render gate into CI: run `npm run qa:render` in `.github/workflows/ci.yml`
-      against the dev server, uploading the report + screenshots as artifacts, and fail on
-      console errors, a blank canvas or a broken cell cap (the exact checks — the
-      SwiftShader stall comparison stays advisory; see `scripts/qa/render_qa.mjs`).
-      Also for this item: `scripts/verify_live.mjs` now walks whatever tiers the deployed
-      manifest lists, and so no longer fails if one is missing altogether — have it assert
-      the tier set it expects (or at least a count) so a manifest that lost r8 cannot pass.
-      Waiting on the user (2026-11-17): the Accept needs a real GitHub Actions run, and
-      `ci.yml` only triggers on a pull request or a push to `main` — a PR has not been
-      asked for. The same PR would be the first Actions run of the `verify` +
-      `verify:data` steps added to CI and to the deploy workflow in Sprint 8.
-      Accept: CI job green on a clean PR and red on a deliberately-broken render; runtime
-      < 10 min.
-      Gate: verify.
+(empty — the last queued item, the CI render gate, shipped in tick 15. Next items come from
+the **Backlog** once broken down; read `knowledge/README.md` first.)
 
 ## Backlog (needs breakdown before queueing)
 
@@ -1027,3 +1011,47 @@ that tightened the cap rule (tick 13) and the night-lights basemap (tick 14) are
       magnified texture is a grey blur over water. Not verified: a real GPU, a real
       2048-limited device (the limit was emulated), the re-upload hitch on toggle; the
       encode script needs numpy + Pillow and is not run in CI.)*
+- [x] Wire the render gate into CI: run `npm run qa:render` in `.github/workflows/ci.yml`
+      against the dev server, uploading the report + screenshots as artifacts, and fail on
+      console errors, a blank canvas or a broken cell cap (the exact checks — the
+      SwiftShader stall comparison stays advisory; see `scripts/qa/render_qa.mjs`).
+      Also for this item: `scripts/verify_live.mjs` now walks whatever tiers the deployed
+      manifest lists, and so no longer fails if one is missing altogether — have it assert
+      the tier set it expects (or at least a count) so a manifest that lost r8 cannot pass.
+      Waiting on the user (2026-11-17): the Accept needs a real GitHub Actions run, and
+      `ci.yml` only triggers on a pull request or a push to `main` — a PR has not been
+      asked for. The same PR would be the first Actions run of the `verify` +
+      `verify:data` steps added to CI and to the deploy workflow in Sprint 8.
+      Accept: CI job green on a clean PR and red on a deliberately-broken render; runtime
+      < 10 min.
+      Gate: verify.
+      *(Done 2026-11-25, factory tick 15. What shipped: a `render` job in
+      `.github/workflows/ci.yml`, beside `build`, that installs the Chromium the locked
+      playwright-core expects, runs `npm run qa:render -- --quick` (no `--baseline`, no
+      `--max-stall-ms`: stalls stay advisory), prints each failure as an annotation and
+      uploads `scripts/qa/out/` as artifact `render-qa` on every run. `scripts/qa/server.mjs`
+      now starts Vite on the literal 127.0.0.1 it probes and drives (`devServerArgs`,
+      `devServerUrl`). `scripts/verify_live.mjs` asserts the deployed tier set against the
+      committed manifest (`tierSetProblems`: lod, order, h3Res, tiled, cellCount).
+      One review send-back: the first checker failed the change because Vite listened on the
+      name `localhost` while the harness probed 127.0.0.1; the maker reproduced it with
+      `localhost` redirected (timeout after 90 s before, ready in under 1 s after) and fixed
+      the harness, not the workflow. A fresh checker passed it. Gate green: 382 tests,
+      build, `qa:render --quick` PASS in 441 s.
+      Evidence for the Accept, all on pull request #3 (read from the Actions API):
+      green on the clean head `71f051bc` — run 45660128133, `render` job 5 min 12 s, every
+      tier reached, artifact uploaded; red on the deliberate break `03b2788d` (one
+      `console.error` at boot) — run 45661678268, `render` failed with
+      "console.error (boot): deliberate render-gate break (CI red proof)", annotation printed,
+      artifact uploaded, while `build` stayed green; green again on the revert `b0a775e0` —
+      run 45663054742, `render` job 4 min 17 s. Runtime is under 10 min in all three.
+      `verify_live`: against local static servers a manifest without r8 exits 1 with
+      `missing tier "r8"` (the previous script passed it); duplicated and reordered tiers fail.
+      Not verified: the new `verify_live` assertion against a real deployment (the next
+      deploy's `verify-live` job is its first live run); whether a GitHub runner actually
+      resolves `localhost` to `::1` first — the job passed with the fix and was never run
+      without it; that a step hitting its timeout still triggers the annotation step.
+      Minor findings left open (second checker): the harness's default `--budget-ms` (30 min)
+      exceeds the step's 15-min timeout, so a very slow run is killed before it writes a
+      report; `server.test.mjs` checks that args and URL agree but not that
+      `ensureDevServer` uses them. Seven entries from this tick are in `knowledge/INBOX.md`.)*
