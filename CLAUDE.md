@@ -7,7 +7,8 @@ Population (H3, CC-BY 4.0), in-browser SNAPPY Parquet via hyparquet, static GitH
 Anchor files: [VISION.md](VISION.md) north star · [docs/architecture.md](docs/architecture.md)
 locked decisions · [specs/TODO.md](specs/TODO.md) work queue + loop contract ·
 [PROMPT.md](PROMPT.md) per-tick iteration prompt · [PROJECT_STATE.md](PROJECT_STATE.md)
-sprint history / PM log. The factory: [`/factory`](.claude/commands/factory.md) orchestrates
+sprint history / PM log · [knowledge/](knowledge/README.md) what the work has taught, by
+topic (read the notes its index lists before touching those paths). The factory: [`/factory`](.claude/commands/factory.md) orchestrates
 a maker ([factory-implementer](.claude/agents/factory-implementer.md)) and a checker
 ([factory-reviewer](.claude/agents/factory-reviewer.md)) around `npm run gate`.
 
@@ -24,6 +25,7 @@ React 19 + TypeScript (strict) + Vite + Tailwind v4 · deck.gl 9 · Zustand · h
 | `npm test` | Unit tests (vitest, plain Node, ~20 s) over the pure render logic — LOD + cull, tier selection + the cap bound, density, scales, tiles, H3 column, deep-links |
 | `npm run gate` | **The factory gate** — path-scoped: queue lint + `verify` always; `qa:render --quick` if the browser loads what changed; `verify:data` if pipeline/data changed; every changed file < 100 MB |
 | `npm run queue -- <status\|next\|lint>` | The one parser of `specs/TODO.md` (first unchecked item, blocked state, format) |
+| `npm run check:freshness` | Is the shipped Kontur release still the newest? HEADs the source bucket for every later date, with the shipped release as a positive control (~25 s, needs the network, not part of the gate); exit 0 current · 1 newer · 2 inconclusive |
 | `npm run verify:live [url]` | Post-deploy E2E — fetch + parse the deployed manifest/tiers/tile, Σ-pop check |
 | `npm run verify:data` | Local data gate — every whole tier + all 2,409 r7 and 12,761 r8 tiles: Σ-pop, counts, CRS bounds, H3 parent roll-ups (tile ↔ parent, r5 ↔ r6, r7 ↔ r8), band contiguity, file sizes |
 | `npm run qa:render` | Headless render QA — zoom sweep, frame timing, stall + console-error gate |
@@ -70,5 +72,8 @@ CDN-propagation retries).
   thin: the decision goes in a pure function, the test goes on the function.
 - The render gate drives the Vite dev server, which reloads on file changes — never edit
   the tree while `npm run gate` / `npm run qa:render` is running, and never run two at once.
+- A correction or a ruling the owner gives in a session goes into `knowledge/INBOX.md` at
+  once, in their words, as an `[owner]` entry — it is otherwise lost when the session ends.
+  Agents doing a queue item flag what was wrong or missing there; they never edit the notes.
 - Progress is marked only in `specs/TODO.md` (`[x]` / `BLOCKED:`); sprint-level summaries
   go to `PROJECT_STATE.md`. The agent forgets — the repo doesn't.

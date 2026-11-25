@@ -48,6 +48,8 @@ jobs:
   # Post-deploy gate: fetch + parse the LIVE data the way the browser does
   # (whole-file + transparent gzip) and assert it loads end-to-end. Catches
   # deploy-only failures (e.g. CDN gzip+range) that build-time checks cannot.
+  # The checkout is the commit just deployed: its public/data/manifest.json (whose
+  # tier set verify:data asserted above) is the tier set the live manifest must match.
   verify-live:
     needs: deploy
     runs-on: ubuntu-latest

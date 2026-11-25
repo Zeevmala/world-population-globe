@@ -12,6 +12,21 @@ import { join } from 'node:path'
 
 const READY_TIMEOUT_MS = 90_000
 
+/**
+ * The one address the dev server is bound to, probed at and driven through. Vite's
+ * default host is the name `localhost`, which Node resolves in the system's order —
+ * `::1` first on an Ubuntu GitHub runner — while the harness probes `127.0.0.1`: the
+ * server would come up where the probe never looks, and every run would die at boot.
+ * Binding to the literal makes the address independent of name resolution.
+ */
+export const DEV_HOST = '127.0.0.1'
+
+/** The URL the harness probes and drives for a dev server on `port`. */
+export const devServerUrl = (port) => `http://${DEV_HOST}:${port}/`
+
+/** Vite's command line (after the node binary): bound to {@link DEV_HOST}, on exactly `port`. */
+export const devServerArgs = (bin, port) => [bin, '--host', DEV_HOST, '--port', String(port), '--strictPort']
+
 async function isListening(url) {
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(2000) })
@@ -29,7 +44,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
  * the harness must never kill a dev server it did not start.
  */
 export async function ensureDevServer({ root, port, log }) {
-  const url = `http://127.0.0.1:${port}/`
+  const url = devServerUrl(port)
   if (await isListening(url)) {
     log(`attached to an existing dev server on ${url}`)
     return { url, started: false, stop: async () => {} }
@@ -40,8 +55,9 @@ export async function ensureDevServer({ root, port, log }) {
     throw new Error(`vite not found at ${bin} — is node_modules linked into ${root}?`)
   }
 
-  log(`starting dev server: node ${bin} --port ${port} --strictPort  (cwd ${root})`)
-  const child = spawn(process.execPath, [bin, '--port', String(port), '--strictPort'], {
+  const args = devServerArgs(bin, port)
+  log(`starting dev server: node ${args.join(' ')}  (cwd ${root})`)
+  const child = spawn(process.execPath, args, {
     cwd: root,
     stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, FORCE_COLOR: '0' },

@@ -17,7 +17,8 @@ normalization).
 
 ## The tick
 
-1. **Understand before editing.** Read the item, then the code it names, then the code
+1. **Understand before editing.** Read the item, then `knowledge/README.md` and the notes
+   its index lists for the files the item names, then the code it names, then the code
    that calls it. Reproduce the defect or measure the baseline first — a number or a
    failing test you saw yourself, not the one in the item's description. If the item's
    premise turns out to be wrong, stop and say so; do not implement a fix for a problem
@@ -47,6 +48,9 @@ normalization).
 
 - Do **not** commit, push, stash, or touch `specs/TODO.md` / `PROJECT_STATE.md`. Leave the
   work in the tree.
+- Do **not** edit `knowledge/**`. A note that is wrong, stale or missing is reported in
+  the `KNOWLEDGE:` block below; someone else curates it. An agent finishing its own item
+  is the wrong one to rewrite what every later agent will rely on.
 - Never hand-edit `public/data/**`. Change `pipeline/`, re-run it, let `verify:data` judge.
 - Never weaken a gate to get green: no skipped or deleted tests, no loosened assertion,
   no `eslint-disable` without a reason on the same line, no raised threshold.
@@ -65,8 +69,18 @@ ACCEPT:
 NOT VERIFIED: <anything you could not check here, and why — or "nothing">
 GATE: <the last gate summary block, verbatim>
 RISKS: <what a reviewer should look at hardest>
+KNOWLEDGE: <"nothing", or one entry per thing you were told that was wrong, or had to
+           work out because nothing recorded it — the item's premise, a note, a doc, a
+           comment, a constant>
+  [missing|wrong|stale] <topic> — <what misled you, or what you had to find out> —
+    evidence: <the command, file:line or URL that shows it>
+    suggest: <the correction, if you have it>
 COMMIT: <a conventional-commit subject and a body explaining why, not what>
 ```
+
+`KNOWLEDGE:` is not a place for findings about your own change (those are `RISKS`) or
+for things you merely read. It is for what would have saved you time, or kept you from a
+wrong first cut, had it been written down — so the next agent does not pay for it again.
 
 Say plainly what you did not verify. An honest "could not check on SwiftShader" is
 worth more than a confident claim the reviewer then disproves.

@@ -21,3 +21,56 @@ jobs:
       - run: npm run verify:data
       # specs/TODO.md is the factory's state file — a malformed queue halts or misleads it.
       - run: npm run queue -- lint
+
+  # The render gate: headless Chromium drives the Vite dev server (the QA handles
+  # `__globe` / `__deck` exist only in a dev build) through the gate's --quick plan.
+  # It fails on the exact checks — console errors and uncaught page errors, a blank
+  # canvas or screenshot, a dead or lost WebGL context, the 120 k cells/frame cap, the
+  # wrong tier, a tier never reached. Frame times and stalls stay advisory: the runner
+  # has no GPU, so this is SwiftShader, and no --baseline or --max-stall-ms is passed.
+  # A job of its own so it runs beside `build`, not after it.
+  render:
+    runs-on: ubuntu-latest
+    # A hang must not hold the PR for the 6-hour default. The step's own timeout below
+    # fires first, so the report and screenshots are still uploaded.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # scripts/qa/browser.mjs never installs a browser: it takes QA_CHROMIUM_PATH first.
+      # Install the Chromium build the locked playwright-core expects (and its system
+      # libraries), and point the harness at it explicitly.
+      - name: Install headless Chromium
+        run: |
+          npx playwright-core install --with-deps --no-shell chromium
+          path="$(node -p "require('playwright-core').chromium.executablePath()")"
+          test -x "$path"
+          echo "QA_CHROMIUM_PATH=$path" >> "$GITHUB_ENV"
+      - name: Render gate (qa:render --quick)
+        id: render
+        timeout-minutes: 15
+        run: npm run qa:render -- --quick
+      # Each failure as an annotation on the run, so it is readable without the log —
+      # only when the render step itself failed, not when setup did.
+      - name: Annotate render-gate failures
+        if: failure() && steps.render.outcome == 'failure'
+        run: |
+          f=scripts/qa/out/render-qa.json
+          if [ ! -f "$f" ]; then echo "::error title=render gate::the render step failed without writing a report — a harness error (exit 2) or the step timeout; see the step log"; exit 0; fi
+          node -e '
+            const r = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))
+            const clean = (s) => String(s).replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A")
+            for (const f of r.verdict.failures) console.log(`::error title=render gate::${clean(f)}`)
+          ' "$f"
+      - name: Upload render report + screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: render-qa
+          path: scripts/qa/out/
+          if-no-files-found: warn
+          retention-days: 14

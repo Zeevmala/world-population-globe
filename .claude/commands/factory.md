@@ -43,6 +43,14 @@ implements, a script gates, a checker reviews, and only then do you commit.
      is kept, not deleted), add a line starting `BLOCKED: <item title> — <reason, what
      was tried, the stash name>` under **Blocked**, commit only that, push, and stop.
 6. A maker that reports `RESULT: BLOCKED` goes straight to the blocked path.
+7. **Keep what the tick learned.** On every path — commit or blocked — append the
+   `KNOWLEDGE:` entries from the maker's report and from every checker's verdict to
+   `knowledge/INBOX.md`, verbatim, under a heading `### <date> · tick <n> · <item title>`
+   with each entry marked `(maker)` or `(checker)`, in the same commit as the tick's
+   result. Skip the heading when all of them said "nothing". Do not act on an entry, and
+   do not edit any other file under `knowledge/` — the notes are curated separately, so
+   that a tick in a hurry cannot rewrite what later ticks rely on. A blocked tick's
+   entries matter most: they are often why it blocked.
 
 ## Rules of the loop
 
@@ -53,8 +61,26 @@ implements, a script gates, a checker reviews, and only then do you commit.
 - **Never push to `main`, never open or merge a PR unless asked.**
 - You may fix a typo in the *(Done …)* note. You may not fix the maker's code — send it back.
 
+## Writing a queue item
+
+Whoever adds an item to the **Queue**, or breaks a Backlog entry down into one, reads
+`knowledge/README.md` and the notes it indexes first, and says in the item where its
+premise was measured (a command, a bench, a Done note). Three of the first fourteen
+ticks were sent back, or had their criteria rewritten mid-review, because the item
+itself was wrong — a premise nobody had measured, or a criterion that contradicted a
+number recorded two ticks earlier. A maker implements the item as written; an error
+there costs a whole tick.
+
+## The owner's rulings
+
+When the owner corrects something or decides something in the session — a cartographic
+judgment, a threshold, a go-ahead, a "not like that" — append it to `knowledge/INBOX.md`
+at once, in their words, as an `[owner]` entry with the date. A ruling given in chat is
+otherwise gone when the session ends, and the next session asks again or guesses.
+
 ## After the run
 
 Append a sprint entry to `PROJECT_STATE.md` (what shipped, the measured evidence, what
 could not be verified and why), commit, push, and report: items done, items blocked,
-what is next in the queue.
+what is next in the queue, and how many entries are waiting in `knowledge/INBOX.md`
+(`sed -n '/^## Waiting/,$p' knowledge/INBOX.md | grep -c '^- \['`).

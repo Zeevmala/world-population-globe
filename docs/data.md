@@ -252,6 +252,32 @@ unreachable here. Re-check by opening
 https://data.humdata.org/dataset/kontur-population-dataset from an unrestricted network
 before concluding the dataset is stale rather than merely unchanged.
 
+### Re-check — 2026-11-24, and how to repeat it
+
+Probe (1) above is now a command, so the answer does not have to be taken from a
+three-month-old paragraph:
+
+```bash
+npm run check:freshness        # ~25 s; needs the network; not part of `npm run gate`
+```
+
+`scripts/check_freshness.mjs` reads `dataDate` from the committed manifest, HEADs the
+`_r4.gpkg.gz` object for every later date through today, and probes the shipped release
+first as a positive control. Exit 0 = still the newest, 1 = a newer release exists (it
+prints the date), 2 = inconclusive — the control did not answer 200, or some dates got no
+answer — which is never reported as "current".
+
+**Result, 2026-11-24: `2023-11-01` is still current.** Control 200; 1,119 dates
+(2023-11-02 … 2026-11-24) all answered 403, the bucket's answer for a key that does not
+exist; 22.6 s. With a release date that does not exist as the control (`--since
+2023-10-01`) the script exits 2 without sweeping, as it should.
+
+What it cannot see is unchanged from the audit above: a release published under another
+name, prefix or host, or one without an r4 file. The dataset's own pages (§2) are still
+the human check, and they are still unreachable from the cloud sessions this repo is
+worked in. Re-run it before any claim that the data is current, and after 30 days at the
+latest; a result older than that is a guess.
+
 ### Upgrade path, when a newer release does land
 
 The schema is stable across Kontur releases (`h3 TEXT`, `population REAL`, EPSG:3857
