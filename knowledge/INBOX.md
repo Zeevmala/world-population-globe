@@ -110,6 +110,69 @@ Done note or a commit; none is new.
   suggest: when a schedule is next registered, fire it once by hand, record the run's
   status next to `git ls-remote --heads origin <branch>`, and write the entry from that.
 
+### 2026-11-25 · tick 15 · Wire the render gate into CI
+
+Entries as the maker (two rounds) and the two checkers reported them; where more than one
+agent flagged the same thing it is listed once with all of them named.
+
+- [wrong] (maker, checker 1, checker 2) `scripts/qa/browser.mjs` pool lookup —
+  `findChromium()` searches `PLAYWRIGHT_BROWSERS_PATH`/`/opt/pw-browsers` for
+  `chromium-*/chrome-linux/chrome`, but the pool here, and playwright-core 1.62's Chrome for
+  Testing builds, use `chrome-linux64/`. The pool branch never matches; local runs only
+  work because the container sets `CHROME_PATH=/usr/bin/google-chrome`, and CI only works
+  because the workflow sets `QA_CHROMIUM_PATH` — evidence: `ls /opt/pw-browsers/chromium-1243`
+  → `chrome-linux64`; `node -e "import('./scripts/qa/browser.mjs').then(m=>console.log(m.findChromium()))"`
+  → `/usr/bin/google-chrome`; `npx playwright-core install --dry-run --no-shell chromium`
+  suggest: add `chrome-linux64/chrome` to the candidate list (a code item), and record that
+  the binary in use is the one `report.browser.executable` names.
+- [stale] (maker) `CLAUDE.md` CI line — "CI: `.github/workflows/ci.yml` (`verify` +
+  `verify:data` + queue lint)" is wrong once this lands: there is also a `render` job
+  running `qa:render --quick` — evidence: `CLAUDE.md`, "Commands", the "CI:" line;
+  `.github/workflows/ci.yml` job `render`
+  suggest: "CI: `ci.yml` — `build` (`verify` + `verify:data` + queue lint) and `render`
+  (`qa:render --quick`, report + screenshots as artifact `render-qa`)". An owner edit.
+- [stale] (maker, checker 1, checker 2) `knowledge/verification-limits.md`, "`verify:live`
+  accepts a deployed manifest that has lost a tier" — this change fixes that — evidence:
+  `scripts/verify_live.mjs` `tierSetProblems`; a manifest without r8 now exits 1 with
+  `missing tier "r8"`, and HEAD's version passed it
+  suggest: rewrite the entry: `verify:live` asserts the deployed tier set (lod, order,
+  h3Res, tiled, cellCount) equals the checkout's `public/data/manifest.json`, so running it
+  from a checkout whose manifest differs from the deployment fails by design; check:
+  `scripts/verify_live.test.mjs`.
+- [missing] (maker) the gate's path scoping does not cover `.github/workflows/**` or
+  `scripts/verify_live.mjs` — a change to how CI runs the render gate never triggers the
+  render gate locally, so an item like this needs its own headless run — evidence:
+  `npm run gate -- --skip-render --dry-run` → only `queue lint` and `verify`;
+  `scripts/factory/gate.mjs` `RENDER_PATHS`
+  suggest: say so in the note on what each check can see.
+- [missing] (maker) the proxy refuses the live Pages host, so `verify:live` cannot be run
+  from this container at all — evidence:
+  `curl -sS https://zeevmala.github.io/world-population-globe/data/manifest.json` →
+  `CONNECT tunnel failed, response 403`
+  suggest: an entry under "No local check sees what the CDN does": from an agent box here,
+  only the deploy workflow's `verify-live` job can run it.
+- [missing] (maker, checker 1, checker 2) the QA dev server's bind address —
+  `ensureDevServer` started Vite with no `--host` while probing a literal 127.0.0.1. Vite
+  binds whatever Node's lookup of `localhost` returns first, so on a host where that is not
+  127.0.0.1 every headless harness dies at boot after 90 s. This sandbox maps `localhost`
+  to 127.0.0.1 only and has no IPv6, so no local run could show it. That an Ubuntu runner
+  resolves `localhost` to `::1` first is unmeasured — evidence:
+  `node_modules/vite/dist/node/chunks/node.js` `resolveHostname`, `tryBindServer`;
+  `cat /etc/hosts`; `node -e "require('net').createServer().listen(0,'::1')"` →
+  `EAFNOSUPPORT`; a preload making `localhost` resolve to 127.0.0.2 (90,375 ms failure
+  before the fix, ready in 868 ms after)
+  suggest: an entry in verification-limits.md: "a green headless run here proves nothing
+  about name resolution or IPv6; the harness binds and drives `DEV_HOST`, a literal", with
+  `check: scripts/qa/server.test.mjs`; once an Actions run exists, record what its "dev
+  server ready on" line shows.
+- [missing] (maker) stopping a background server from a shell —
+  `(cd dir && python3 -m http.server … &); echo $!` records the wrapper's pid, not the
+  server's; a probe server outlived its `kill` and kept serving a deleted directory, which
+  made a later control fail with a 404 HTML page — evidence: `pgrep -af http.server` showed
+  the pid still alive after `kill $(cat srv.pid)`
+  suggest: start it as `python3 -m http.server PORT --directory DIR &` in the same shell
+  and check `pgrep` after the kill.
+
 ### Owner rulings recorded before this file existed (not verbatim unless marked)
 
 - [owner] 2026-08, verbatim from the session: "this site needs to be the best in the world,
